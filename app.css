@@ -282,3 +282,10 @@ td.acts .btn{margin-left:5px}
 .pre{max-height:260px;overflow:auto;background:var(--bg);border:1px solid var(--line);
   border-radius:8px;padding:10px;margin-top:8px;font:12px/1.5 ui-monospace,Consolas,monospace;
   white-space:pre-wrap;word-break:break-word;color:var(--tx2)}
+
+/* Пронумерованные шаги внутри карточки мастера. Отступ слева — под цифру:
+   глобальный сброс *{padding:0} иначе съедает номера вместе с отступом. */
+.steps{margin:10px 0 0;padding-left:20px;color:var(--tx2);font-size:14px;line-height:1.65}
+.steps li{margin-bottom:7px}
+.steps li::marker{color:var(--acc2);font-weight:700}
+.steps code,p code,li code{background:var(--card2);padding:1px 5px;border-radius:4px;font-size:12px}

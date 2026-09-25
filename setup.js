@@ -293,13 +293,26 @@
 
     /* 5 — golden_key */
     h += stepBox(5, "Отдать воркеру cookie сессии", !!(st.fn && st.secret),
-      '<p class="muted">Воркеру нужен <code>golden_key</code> — cookie сессии FunPay. Берётся ' +
-      "в браузере на funpay.com: <b>F12 → Application → Cookies → funpay.com → golden_key</b>.</p>" +
-      '<div class="note warn">Вставляйте его в Supabase напрямую, не сюда. Это ключ от аккаунта: ' +
-      "у кого он есть, тот читает вашу переписку и правит ваши лоты. Через панель он не проходит " +
-      "и в ней не хранится.</div>" +
-      '<p class="muted" style="margin-top:10px">В разделе секретов добавьте имя ' +
-      "<code>FUNPAY_GOLDEN_KEY</code> и значение.</p>" +
+      '<p class="muted">Воркеру нужен <code>golden_key</code> — cookie вашей сессии на FunPay. ' +
+      "Нужен компьютер, с телефона так не достать.</p>" +
+      '<ol class="steps"><li>Открыть <b>funpay.com</b> и убедиться, что вы вошли.</li>' +
+      "<li>Нажать <b>F12</b>.</li>" +
+      "<li><b>Chrome / Edge:</b> вкладка <b>Application</b> («Приложение», может прятаться под " +
+      "<code>»</code>) → слева <b>Storage → Cookies → https://funpay.com</b>.<br>" +
+      "<b>Firefox:</b> вкладка <b>Хранилище</b> → <b>Куки</b> → <code>https://funpay.com</code>.</li>" +
+      "<li>Найти строку <code>golden_key</code>, дважды щёлкнуть по её значению в столбце " +
+      "<b>Value</b> и скопировать. В Firefox — правой кнопкой, «Копировать значение».</li></ol>" +
+      '<div class="note">Длинная строка букв и цифр, около 32 символов. Быстрая проверка: ' +
+      "введите в консоли <code>document.cookie</code> — если <code>golden_key</code> там виден, " +
+      "копируйте прямо оттуда; если нет, он закрыт от скриптов, и путь только через Application.</div>" +
+      '<div class="note warn">Вставляйте его в Supabase напрямую, не сюда и никому не присылайте. ' +
+      "В отличие от ключей Supabase это доступ к аккаунту FunPay: переписка, лоты, сделки. " +
+      "Через панель он не проходит и в ней не хранится.</div>" +
+      '<p class="muted" style="margin-top:10px">В разделе секретов: <b>Add new secret</b>, имя ' +
+      "<code>FUNPAY_GOLDEN_KEY</code>, значение — скопированное.</p>" +
+      '<div class="note">Не выходите из FunPay на том компьютере, откуда взяли ключ: выход убивает ' +
+      "сессию, и воркер начнёт отвечать «golden_key не подошёл или истёк». Тогда возьмите новый " +
+      "тем же способом.</div>" +
       '<div style="margin-top:12px"><a class="btn pri" href="' + dash("/settings/functions") +
       '" target="_blank" rel="noopener">' + ic("lock") + " Открыть секреты функций</a></div>");
 
