@@ -26,14 +26,72 @@
   var FILES = { schema: null, cron: null, worker: null };
   var LOADING = false;
 
-  // Черновик мастера. Ключи не кладём в localStorage раньше, чем человек нажал
-  // «Включить»: до этого он ещё может закрыть вкладку и передумать.
-  var D = { url: "", anon: "", svc: "", paste: "", probe: null, probing: false, err: "" };
+  var D = {
+    url: "", anon: "", svc: "", paste: "",
+    probe: null, probing: false, err: "",
+    // Что уже сделано в самом Supabase. Не галочки, которые человек ставит
+    // сам, а то, что мастер проверил запросом: таблицы, воркер, секрет.
+    state: null, checking: false,
+  };
+
+  // Черновик переживает перезагрузку. Без этого «обновите страницу» стирало
+  // вставленное, и всё начиналось сначала — ровно та ловушка, из-за которой
+  // мастер и казался бесполезным.
+  var DRAFT = "reseller-web:setup";
+
+  function saveDraft() {
+    try {
+      localStorage.setItem(DRAFT, JSON.stringify({ url: D.url, anon: D.anon, svc: D.svc }));
+    } catch (e) { /* приватный режим — переживём, просто не сохранится */ }
+  }
 
   function boot() {
     if (D.url || D.anon || D.svc) return;
-    D.url = DB.settings.sbUrl || "";
-    D.svc = DB.settings.sbKey || "";
+    try {
+      var d = JSON.parse(localStorage.getItem(DRAFT) || "{}");
+      D.url = d.url || ""; D.anon = d.anon || ""; D.svc = d.svc || "";
+    } catch (e) { /* пусто так пусто */ }
+    // Если панель уже настроена, черновик берём из настроек.
+    if (!D.url) D.url = DB.settings.sbUrl || "";
+    if (!D.svc) D.svc = DB.settings.sbKey || "";
+  }
+
+  /* ---------------- что уже готово ----------------
+     Мастер спрашивает у самого Supabase, а не полагается на память человека:
+     после перезагрузки или через неделю видно, на чём остановились.
+
+     Двух запросов хватает на три шага: REST говорит про таблицы, а сухой
+     прогон различает «воркера нет» (404), «воркер есть, секрета нет» и
+     «работает целиком». */
+  function checkAll() {
+    if (!D.url || !D.svc || D.checking) return Promise.resolve(D.state);
+    D.checking = true;
+    var base = String(D.url).replace(/\/+$/, "");
+    var h = { apikey: D.svc, Authorization: "Bearer " + D.svc };
+    var st = { tables: false, fn: false, secret: false, msg: "" };
+
+    var tables = fetch(base + "/rest/v1/orders?select=id&limit=1", { headers: h })
+      .then(function (r) { st.tables = r.ok; }, function () {});
+
+    var worker = fetch(base + "/functions/v1/funpay-sync?dry=1", { headers: h })
+      .then(function (r) {
+        if (r.status === 404) return;            // функция не выложена
+        st.fn = true;
+        return r.json().then(function (j) {
+          if (j && j.ok) { st.secret = true; D.probe = { kind: "ok", data: j }; return; }
+          var m = String((j && j["ошибка"]) || "");
+          st.msg = m;
+          // «нет FUNPAY_GOLDEN_KEY» — воркер жив, не хватает только секрета.
+          st.secret = !/FUNPAY_GOLDEN_KEY/i.test(m);
+        }, function () { /* не JSON — считаем, что функция есть, но отвечает странно */ });
+      }, function () { /* сети нет или CORS — оставляем как есть */ });
+
+    return Promise.all([tables, worker]).then(function () {
+      D.checking = false;
+      D.state = st;
+      window.__render();
+      return st;
+    });
   }
 
   /* ---------------- разбор вставленного ----------------
@@ -104,6 +162,20 @@
       ic("ul") + " " + esc(label) + "</button>";
   }
 
+  /** Короткая сводка сверху: что мастер увидел в вашем проекте. */
+  function progressNote(st) {
+    var left = [];
+    if (!st.tables) left.push("шаг 3 — таблицы");
+    if (!st.fn) left.push("шаг 4 — воркер");
+    else if (!st.secret) left.push("шаг 5 — golden_key");
+    if (!left.length) {
+      return '<div class="note ok">В проекте уже всё на месте: таблицы, воркер и секрет. ' +
+        "Осталось нажать «Включить и проверить» внизу.</div>";
+    }
+    return '<div class="note">Проверено в вашем проекте. Осталось: <b>' + esc(left.join(", ")) +
+      "</b>." + (st.msg ? " Воркер говорит: " + esc(st.msg) : "") + "</div>";
+  }
+
   function view() {
     boot();
     need();
@@ -115,10 +187,21 @@
     var haveBase = !!(D.url && D.anon);
     var haveKeys = !!(haveBase && D.svc);
     var live = DB.settings.driver === "supabase" && DB.settings.sbUrl === D.url;
+    var st = D.state || {};
+
+    // Первый заход с готовыми ключами — сразу спрашиваем, что уже сделано.
+    if (haveKeys && !D.state && !D.checking) setTimeout(checkAll, 0);
 
     var h = '<div class="head"><div><h1>Подключение</h1><div class="sub">' +
       "Чтобы в панели были настоящие заказы с FunPay. Всё бесплатно и без карты." +
-      "</div></div></div>";
+      "</div></div>" +
+      (haveKeys
+        ? '<span class="grow"></span><button class="btn" data-act="setup-check"' +
+          (D.checking ? " disabled" : "") + ">" + ic("ok") +
+          (D.checking ? " Проверяю…" : " Проверить, что уже готово") + "</button>"
+        : "") +
+      "</div>" +
+      (haveKeys && D.state ? progressNote(st) : "");
 
     if (D.err) {
       h += '<div class="card"><div class="note err">Заготовки не загрузились: ' + esc(D.err) +
@@ -162,7 +245,7 @@
     }
 
     /* 3 — SQL */
-    h += stepBox(3, "Создать таблицы и расписание", false,
+    h += stepBox(3, "Создать таблицы и расписание", !!st.tables,
       '<p class="muted">Один запрос: таблицы, крон раз в минуту и уборка за ним. Оба места в ' +
       "шаблоне уже подставлены — ничего дописывать не нужно.</p>" +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
@@ -173,7 +256,7 @@
       '<pre class="pre">' + esc((sql() || "загружается…").slice(0, 1400)) + "\n…</pre></details>");
 
     /* 4 — воркер */
-    h += stepBox(4, "Выложить воркер", false,
+    h += stepBox(4, "Выложить воркер", !!st.fn,
       '<p class="muted">Это та часть, которая ходит на FunPay: панель из браузера туда не ' +
       "попадёт никогда. В Supabase: <b>Edge Functions → Deploy a new function</b>, имя строго " +
       "<code>funpay-sync</code>, содержимое — одним файлом.</p>" +
@@ -183,7 +266,7 @@
       ic("link") + " Открыть Edge Functions</a></div>");
 
     /* 5 — golden_key */
-    h += stepBox(5, "Отдать воркеру cookie сессии", false,
+    h += stepBox(5, "Отдать воркеру cookie сессии", !!(st.fn && st.secret),
       '<p class="muted">Воркеру нужен <code>golden_key</code> — cookie сессии FunPay. Берётся ' +
       "в браузере на funpay.com: <b>F12 → Application → Cookies → funpay.com → golden_key</b>.</p>" +
       '<div class="note warn">Вставляйте его в Supabase напрямую, не сюда. Это ключ от аккаунта: ' +
@@ -280,6 +363,7 @@
     if (got.url) D.url = got.url;
     if (got.anon) D.anon = got.anon;
     if (got.svc) D.svc = got.svc;
+    saveDraft();
 
     if (!added) {
       if (loud) toast("В этом тексте ни адреса, ни ключей не нашлось", "err");
@@ -304,6 +388,7 @@
     if (t.id === "setupSvc") {
       // Перерисовку тут не зовём — иначе фокус улетит на середине вставки.
       D.svc = t.value.trim();
+      saveDraft();
       var box = document.querySelector('[data-act="setup-go"]');
       if (box) box.disabled = !D.svc || D.probing;
     }
@@ -321,6 +406,8 @@
       var ta = document.getElementById("setupPaste");
       return absorb(ta ? ta.value : "", true);
     }
+
+    if (a === "setup-check") { D.state = null; window.__render(); return checkAll(); }
 
     if (a === "setup-manual") return manual();
 
@@ -365,6 +452,7 @@
       onOk: function (ov) {
         var g = function (id) { var e = ov.querySelector("#" + id); return e ? e.value.trim() : ""; };
         D.url = g("mUrl").replace(/\/+$/, ""); D.anon = g("mAnon"); D.svc = g("mSvc");
+        saveDraft();
         window.__closeModal();
         window.__render();
         toast("Записал", "ok");
