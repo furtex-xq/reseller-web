@@ -441,6 +441,7 @@
     return '<div class="head"><div><h1>Заказы</h1><div class="sub">' + num(rows.length) +
       " заказов на " + money(total, cur()) + "</div></div><span class=\"grow\"></span>" +
       searchBar("orders", "Покупатель, номер, товар…") +
+      '<button class="btn" data-act="ord-import">' + ic("ul") + " Импорт</button>" +
       '<button class="btn" data-act="ord-export">' + ic("dl") + " Экспорт</button>" +
       '<button class="btn pri" data-act="ord-new">' + ic("plus") + " Заказ</button></div>" +
       (rows.length

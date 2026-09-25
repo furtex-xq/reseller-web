@@ -366,6 +366,88 @@
       },
     });
   }
+  function ordersCsvImport() {
+    var accs = DB.get("accounts");
+    if (!accs.length) return toast("Сначала добавьте аккаунт площадки в настройках", "err");
+    modal({
+      title: "Импорт заказов",
+      wide: true,
+      body:
+        '<div class="note">Формат тот же, что у выгрузки: колонки <b>order</b>, platform, sku, title, ' +
+        "buyer, status, amount, currency, created_at. Заказ с уже известным номером обновится, " +
+        "а не продублируется — файл можно заливать повторно.</div>" +
+        '<div class="note">Готовый файл делает скрипт <a href="funpay-export.user.js" target="_blank" rel="noopener">funpay-export.user.js</a>: он запускается ' +
+        "на самом funpay.com и собирает заказы оттуда. Панель зайти на FunPay не может — это запрет браузера, а скрипт работает внутри FunPay, где вы уже вошли.</div>" +
+        area("Данные", "oi_txt", "order;platform;sku;title;buyer;status;amount;currency;created_at",
+          "", "code") +
+        '<div><button class="btn" data-pick>' + ic("ul") + " Выбрать файл .csv</button></div>",
+      ok: "Импортировать",
+      onOpen: function (ov) {
+        ov.querySelector("[data-pick]").addEventListener("click", function () {
+          pickFile(".csv,.txt", function (text) { ov.querySelector("#oi_txt").value = text; });
+        });
+      },
+      onOk: function (ov) {
+        var rows = R.csvParse(val(ov, "oi_txt"));
+        if (rows.length < 2) return toast("Нужны заголовки и хотя бы одна строка", "err");
+        var head = rows[0].map(function (h) { return h.trim().toLowerCase(); });
+        var idx = function (n) { return head.indexOf(n); };
+        if (idx("order") < 0) return toast("Нужна колонка order с номером заказа", "err");
+
+        // Аккаунт выбираем по названию площадки из файла; нет совпадения — первый.
+        var accBy = {};
+        accs.forEach(function (a) { if (!accBy[a.platform]) accBy[a.platform] = a; });
+        var platKey = function (s) {
+          s = String(s || "").toLowerCase();
+          return s.indexOf("playerok") >= 0 ? "playerok" : "funpay";
+        };
+        var bySku = {};
+        DB.get("products").forEach(function (p) { bySku[p.sku.toLowerCase()] = p; });
+        var known = {};
+        DB.get("orders").forEach(function (o) { known[String(o.external_id).toLowerCase()] = o; });
+
+        var list = [], upd = 0, bad = 0;
+        rows.slice(1).forEach(function (r) {
+          var g = function (n, d) { var i = idx(n); return i >= 0 && r[i] != null ? String(r[i]).trim() : (d || ""); };
+          // Решётку в номере убираем: иначе «#A1B2» и «A1B2» станут двумя заказами.
+          var ext = g("order").replace(/^#/, "");
+          if (!ext) { bad++; return; }
+          var old = known[ext.toLowerCase()];
+          if (old) upd++;
+          var pk = platKey(g("platform"));
+          var acc = (old && DB.byId("accounts", old.account_id)) || accBy[pk] || accs[0];
+          var st = g("status").toLowerCase();
+          if (!R.ORDER_ST[st]) st = old ? old.status : "new";
+          var prod = bySku[g("sku").toLowerCase()];
+          var when = g("created_at");
+          if (when && isNaN(new Date(when).getTime())) when = "";
+          list.push(Object.assign({}, old || {}, {
+            id: (old && old.id) || R.uuid(),
+            account_id: acc.id, platform: acc.platform,
+            external_id: ext,
+            buyer_name: g("buyer", old ? old.buyer_name : ""),
+            title_raw: g("title", old ? old.title_raw : ""),
+            product_id: prod ? prod.id : (old ? old.product_id : null),
+            amount: Number(g("amount", old ? old.amount : 0)) || 0,
+            currency: (g("currency") || (old && old.currency) || DB.settings.currency || "RUB").toUpperCase(),
+            status: st,
+            created_at: when || (old && old.created_at) || R.nowIso(),
+          }));
+        });
+        if (!list.length) return toast("Не нашлось ни одной строки с номером заказа", "err");
+        var i = 0;
+        (function step() {
+          if (i >= list.length) {
+            DB.log("orders_imported", "info", { count: list.length, updated: upd });
+            return done("Загружено: " + (list.length - upd) + " новых" +
+              (upd ? ", обновлено: " + upd : "") + (bad ? ", пропущено: " + bad : ""));
+          }
+          DB.save("orders", list[i++]).then(step, fail);
+        })();
+      },
+    });
+  }
+
   function ordersExport() {
     var rows = DB.get("orders").map(function (o) {
       var p = o.product_id ? DB.byId("products", o.product_id) : null;
@@ -618,6 +700,7 @@
 
       case "ord-new": return orderForm(null);
       case "ord-edit": return orderForm(id);
+      case "ord-import": return ordersCsvImport();
       case "ord-export": return ordersExport();
       case "ord-del": return confirmDel("Заказ будет удалён.", function () {
         DB.remove("orders", id).then(function () { done("Удалено"); }, fail);
