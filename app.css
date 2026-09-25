@@ -266,3 +266,19 @@ td.acts .btn{margin-left:5px}
   .kpi .val{font-size:24px}
   td,th{padding:9px 10px}
 }
+
+/* ---------------- мастер подключения ---------------- */
+/* Номер шага в заголовке карточки. Выполненный шаг помечается галкой, поэтому
+   размер фиксированный: иначе «✓» и «1» дают разную ширину и заголовки едут. */
+.stepn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  width:22px;height:22px;margin-right:9px;border-radius:50%;font-size:12px;font-weight:700;
+  background:var(--card2);color:var(--tx3);border:1px solid var(--line)}
+.stepn.on{background:var(--accDim);color:var(--acc2);border-color:rgba(45,212,191,.35)}
+.card>h2{display:flex;align-items:center}
+.card.ok{border-color:rgba(63,185,80,.32)}
+.note.err{border-left-color:var(--err)}
+.note.ok{border-left-color:var(--ok)}
+.note code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:12px}
+.pre{max-height:260px;overflow:auto;background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:10px;margin-top:8px;font:12px/1.5 ui-monospace,Consolas,monospace;
+  white-space:pre-wrap;word-break:break-word;color:var(--tx2)}

@@ -669,7 +669,16 @@
   }
 
   /* ---------------- диспетчер ---------------- */
-  window.__actions = function (act, id) {
+  // Мастеру подключения нужны окна и закрытие — отдаём их наружу, чтобы
+  // setup.js не заводил собственную модалку рядом с этой.
+  window.__modal = modal;
+  window.__closeModal = close;
+
+  window.__actions = function (act, id, el) {
+    // Мастер подключения живёт в setup.js и свои действия обрабатывает сам.
+    if (act.indexOf("setup-") === 0) {
+      return window.__setupAct ? window.__setupAct(act, el) : toast("setup.js не загрузился", "err");
+    }
     switch (act) {
       case "prod-new": return productForm(null);
       case "prod-edit": return productForm(id);

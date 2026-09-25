@@ -68,6 +68,7 @@
     { id: "rules", t: "Правила", i: "bolt", c: function () { return DB.get("message_rules").filter(function (r) { return r.is_enabled; }).length; } },
     { id: "jobs", t: "Задачи", i: "list", c: function () { return DB.get("jobs").filter(function (j) { return j.status === "pending" || j.status === "failed"; }).length || ""; } },
     { id: "events", t: "Журнал", i: "inbox" },
+    { id: "setup", t: "Подключение", i: "link" },
     { id: "settings", t: "Настройки", i: "gear" },
   ];
 
@@ -692,6 +693,11 @@
     dash: viewDash, products: viewProducts, stock: viewStock, listings: viewListings,
     orders: viewOrders, chats: viewChats, rules: viewRules, jobs: viewJobs,
     events: viewEvents, settings: viewSettings,
+    // Мастер живёт в отдельном файле: он нужен один раз и раздувать app.js незачем.
+    setup: function () {
+      return window.__setupView ? window.__setupView()
+        : '<div class="card"><div class="note err">setup.js не загрузился — обновите страницу.</div></div>';
+    },
   };
 
   function render() {
@@ -754,6 +760,8 @@
 
   /* ---------------- старт ---------------- */
   DB.useSettings(R.loadSettings());
+  // Ссылка #/setup ведёт прямо в мастер: на неё ссылаются SQL-шаблон и документация.
+  if (/^#\/?setup$/i.test(location.hash)) TAB = "setup";
   render();
   DB.loadAll().then(function () {
     loaded = true; render();
@@ -794,6 +802,12 @@
     render();
   }
   window.__startLive = startLive;
+
+  // Переход по #/setup из уже открытой панели меняет только хэш и перезагрузки
+  // не вызывает — без этого ссылка из документации молча не срабатывала бы.
+  window.addEventListener("hashchange", function () {
+    if (/^#\/?setup$/i.test(location.hash) && TAB !== "setup") { TAB = "setup"; render(); }
+  });
 
   // Вкладку свернули — опрос простаивает; вернулись — сверяемся сразу, не
   // дожидаясь следующего тика, иначе панель встречает устаревшими цифрами.
