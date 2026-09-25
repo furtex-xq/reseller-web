@@ -97,10 +97,27 @@
   /* ---------------- разбор вставленного ----------------
      На странице «API Keys» в Supabase адрес и ключи лежат рядом, и проще
      разрешить вставить всё подряд, чем заставлять раскладывать по полям. */
+  /**
+   * Адрес проекта из чего угодно, чем человек располагает:
+   *   https://abcdefgh.supabase.co            — как в «Project URL»
+   *   https://supabase.com/dashboard/project/abcdefgh/settings/api — из адресной строки
+   *   abcdefgh                                — просто код проекта
+   * Последнее — на случай «а где этот адрес вообще»: код виден в адресе дашборда.
+   */
+  function asUrl(text) {
+    var s = String(text || "").trim();
+    var direct = s.match(/https?:\/\/([a-z0-9-]+)\.supabase\.(co|in)/i);
+    if (direct) return "https://" + direct[1].toLowerCase() + ".supabase." + direct[2].toLowerCase();
+    var dashboard = s.match(/supabase\.com\/dashboard\/project\/([a-z0-9-]{16,})/i);
+    if (dashboard) return "https://" + dashboard[1].toLowerCase() + ".supabase.co";
+    // Голый код проекта: ровно он и ничего больше, иначе поймаем случайное слово.
+    if (/^[a-z]{16,24}$/i.test(s)) return "https://" + s.toLowerCase() + ".supabase.co";
+    return "";
+  }
+
   function sniff(text) {
     var got = { url: "", anon: "", svc: "" };
-    var u = String(text).match(/https?:\/\/[a-z0-9-]+\.supabase\.(co|in)/i);
-    if (u) got.url = u[0];
+    got.url = asUrl(text);
     // Новые ключи sb_publishable_/sb_secret_, старые — JWT с ролью внутри.
     var pub = String(text).match(/sb_publishable_[A-Za-z0-9_-]+/);
     if (pub) got.anon = pub[0];
@@ -225,6 +242,15 @@
       esc(D.paste || "") + "</textarea>" +
       '<span class="hint">Ключи остаются в этом браузере. Панель отправляет их только в ваш же проект.</span></div>' +
       (D.url || D.anon || D.svc ? keysTable() : "") +
+
+      // Адрес отдельным полем: в новых проектах он лежит не на странице с
+      // ключами, а в «Data API», так что во вставленное часто не попадает.
+      '<div class="fld" style="margin-top:14px"><label>Адрес проекта</label>' +
+      '<input type="text" id="setupUrl" value="' + esc(D.url) + '" ' +
+      'placeholder="https://xxxxxxxx.supabase.co или просто код проекта">' +
+      '<span class="hint"><b>Project Settings → Data API → Project URL</b>. Или проще: ' +
+      "посмотрите на адрес дашборда — <code>supabase.com/dashboard/project/<b>КОД</b></code>, " +
+      "и вставьте сюда этот КОД, остальное допишется.</span></div>" +
 
       // Секретный ключ отдельным полем: на странице Supabase он замаскирован,
       // и сколько её ни копируй, в буфер попадут точки, а не ключ.
@@ -385,6 +411,12 @@
     var t = e.target;
     if (!t || !t.id) return;
     if (t.id === "setupPaste") { absorb(t.value, false); return; }
+    if (t.id === "setupUrl") {
+      // Перерисовку не зовём, пока человек печатает: иначе фокус улетит.
+      D.url = asUrl(t.value) || "";
+      saveDraft();
+      return;
+    }
     if (t.id === "setupSvc") {
       // Перерисовку тут не зовём — иначе фокус улетит на середине вставки.
       D.svc = t.value.trim();
@@ -397,7 +429,7 @@
   // Поле секретного ключа: разблокировать шаг 6 надо сразу, но перерисовать —
   // только когда человек из поля вышел.
   document.addEventListener("change", function (e) {
-    if (e.target && e.target.id === "setupSvc") window.__render();
+    if (e.target && (e.target.id === "setupSvc" || e.target.id === "setupUrl")) window.__render();
   });
 
   /* ---------------- действия ---------------- */
