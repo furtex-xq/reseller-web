@@ -242,6 +242,9 @@ td.acts .btn{margin-left:5px}
 /* ---------- прочее ---------- */
 .note{background:var(--card2);border:1px solid var(--line);border-left:3px solid var(--info);
   border-radius:10px;padding:13px 15px;font-size:13.5px;color:var(--tx2);line-height:1.6}
+/* Значок внутри текста: без явного размера SVG растягивается на весь блок. */
+.note svg,.prev svg,.sub svg,p svg,label svg{width:15px;height:15px;stroke:currentColor;fill:none;
+  stroke-width:1.9;vertical-align:-2.5px;flex:none;display:inline-block}
 .note.warn{border-left-color:var(--warn)}
 .note b{color:var(--tx)}
 .tpl{display:flex;flex-wrap:wrap;gap:6px}
