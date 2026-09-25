@@ -266,6 +266,83 @@
     };
   }
 
+  /* ---------------- живое обновление ----------------
+     Воркер на Supabase подливает заказы раз в минуту, телефон — когда
+     синхронизируется. Панель об этом узнаёт опросом, а не вебсокетом: опрос
+     раз в 20 секунд уже мельче, чем частота самого источника, и работает с
+     тем же ключом и теми же запросами, что и остальная панель. Вебсокет
+     добавил бы отдельный протокол ради выигрыша, которого не видно.
+
+     Трафик: опрашиваются только таблицы, которые видно в интерфейсе, и
+     перерисовка идёт лишь когда подпись данных изменилась. */
+  var LIVE = {
+    ms: 20000,
+    timer: null,
+    sig: null,
+    on: null,
+    onTick: null,
+    busy: false,
+    state: "off",        // off | poll | error
+    lastAt: null,
+    lastErr: null,
+
+    /** Дешёвая подпись кэша: меняется от любой правки в любой видимой таблице. */
+    signature: function () {
+      var h = 5381, n = 0;
+      for (var i = 0; i < TABLES.length; i++) {
+        var rows = DB.cache[TABLES[i]];
+        if (!rows) continue;
+        var s = TABLES[i] + ":" + rows.length + ":" + JSON.stringify(rows);
+        n += rows.length;
+        for (var j = 0; j < s.length; j++) h = ((h * 33) ^ s.charCodeAt(j)) >>> 0;
+      }
+      return n + "/" + h.toString(36);
+    },
+
+    start: function (onChange) {
+      this.stop();
+      this.on = onChange || this.on;
+      // Локальная база меняется только из этой вкладки — опрашивать нечего.
+      if (DB.driver.name !== "supabase") { this.state = "off"; return; }
+      if (DB.settings.live === false) { this.state = "off"; return; }
+      this.sig = this.signature();
+      this.state = "poll";
+      var self = this;
+      this.timer = setInterval(function () { self.tick(); }, this.ms);
+    },
+
+    stop: function () {
+      if (this.timer) clearInterval(this.timer);
+      this.timer = null;
+      if (this.state === "poll") this.state = "off";
+    },
+
+    tick: function () {
+      var self = this;
+      // Вкладка спрятана — не жжём лимиты впустую.
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (this.busy) return;
+      this.busy = true;
+      DB.loadAll().then(function () {
+        self.busy = false;
+        self.lastAt = new Date();
+        self.lastErr = null;
+        self.state = "poll";
+        if (self.onTick) self.onTick();
+        var now = self.signature();
+        if (now !== self.sig) {
+          self.sig = now;
+          if (self.on) self.on();
+        }
+      }, function (e) {
+        self.busy = false;
+        self.state = "error";
+        self.lastErr = e && e.message ? e.message : "сбой сети";
+        if (self.onTick) self.onTick();
+      });
+    },
+  };
+
   /* ---------------- настройки ---------------- */
   var SETTINGS_KEY = "reseller-web:settings";
   function loadSettings() {
@@ -278,8 +355,12 @@
         theme: s.theme || "dark",
         currency: s.currency || "RUB",
         seller: s.seller || "",
+        // живое обновление: выключается только явно, по умолчанию включено
+        live: s.live !== false,
       };
-    } catch (e) { return { driver: "local", sbUrl: "", sbKey: "", theme: "dark", currency: "RUB", seller: "" }; }
+    } catch (e) {
+      return { driver: "local", sbUrl: "", sbKey: "", theme: "dark", currency: "RUB", seller: "", live: true };
+    }
   }
   function saveSettings(s) {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
@@ -363,7 +444,7 @@
     uuid: uuid, nowIso: nowIso, esc: esc, money: money, num: num, dt: dt, dOnly: dOnly, ago: ago,
     csvParse: csvParse, csvBuild: csvBuild, download: download,
     VAULT: VAULT, encKey: encKey, decKey: decKey,
-    DB: DB, loadSettings: loadSettings, saveSettings: saveSettings,
+    DB: DB, LIVE: LIVE, loadSettings: loadSettings, saveSettings: saveSettings,
     SupabaseDriver: SupabaseDriver,
     renderTemplate: renderTemplate,
   };

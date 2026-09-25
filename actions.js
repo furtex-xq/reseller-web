@@ -635,10 +635,17 @@
     s.sbUrl = g("setUrl"); s.sbKey = g("setKey");
     s.theme = g("setTheme") || "dark"; s.currency = g("setCur") || "RUB";
     s.seller = g("setSeller");
+    var lv = document.getElementById("setLive");
+    if (lv) s.live = !!lv.checked;
     if (s.driver === "supabase" && (!s.sbUrl || !s.sbKey)) return toast("Для Supabase нужны URL и ключ", "err");
     DB.useSettings(s);
     render();
-    DB.loadAll().then(function () { render(); toast("Сохранено", "ok"); },
+    DB.loadAll().then(function () {
+      render();
+      // Хранилище или галка могли поменяться — опрос переподнимаем под новые настройки.
+      if (window.__startLive) window.__startLive();
+      toast("Сохранено", "ok");
+    },
       function (e) { render(); toast("Сохранено, но база не прочиталась: " + e.message, "err"); });
   }
   function sbPing() {

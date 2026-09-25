@@ -71,6 +71,34 @@
     { id: "settings", t: "Настройки", i: "gear" },
   ];
 
+  /* Плашка живого обновления. Показывает не «включено», а когда данные
+     обновлялись последний раз: иначе нельзя отличить тишину от сломанного
+     опроса, а это как раз то, что важно знать. */
+  function livePill() {
+    // display:contents, чтобы обёртка не встряла в flex-раскладку шапки.
+    return '<span id="livePill" style="display:contents">' + livePillInner() + "</span>";
+  }
+  function livePillInner() {
+    if (DB.settings.driver !== "supabase") return "";
+    var L = R.LIVE;
+    if (DB.settings.live === false) {
+      return '<span class="pill mute" title="Включается в настройках">не обновляется</span>';
+    }
+    if (L.state === "error") {
+      return '<span class="pill err" title="' + esc(L.lastErr || "") + '">связь потеряна</span>';
+    }
+    if (livePending) {
+      return '<span class="pill info" title="Перерисуем, как только освободится поле или закроется окно">есть новые данные</span>';
+    }
+    var ago = L.lastAt ? Math.round((Date.now() - L.lastAt.getTime()) / 1000) : null;
+    var t = ago == null ? "ждём первой сверки"
+      : ago < 45 ? "обновлено только что"
+      : ago < 3600 ? "обновлено " + Math.round(ago / 60) + " мин назад"
+      : "давно не обновлялось";
+    return '<span class="pill ok" title="Панель сверяется с базой каждые ' +
+      Math.round(L.ms / 1000) + ' с">' + t + "</span>";
+  }
+
   function header() {
     var s = DB.settings;
     return '<div class="top"><div class="in">' +
@@ -84,6 +112,7 @@
       '<div class="right">' +
       '<span class="pill ' + (s.driver === "supabase" ? "acc" : "mute") + '">' +
       (s.driver === "supabase" ? "Supabase" : "в браузере") + "</span>" +
+      livePill() +
       '<button class="btn icon" id="themeBtn" title="Тема">' + ic("sun") + "</button>" +
       "</div></div></div>";
   }
@@ -598,7 +627,12 @@
       '<span class="hint">Ключ хранится только в этом браузере и никуда не отправляется, кроме вашего же проекта Supabase. ' +
       "Сайт публичный — не вставляйте ключ на чужом компьютере.</span></div>" +
       '<div style="margin-top:12px;display:flex;gap:8px">' +
-      '<button class="btn" data-act="sb-ping">Проверить связь</button></div></div>' +
+      '<button class="btn" data-act="sb-ping">Проверить связь</button></div>' +
+      '<div class="fld" style="margin-top:12px"><label><input type="checkbox" id="setLive"' +
+      (s.live === false ? "" : " checked") + '> Обновлять данные самой</label>' +
+      '<span class="hint">Панель сверяется с базой раз в 20 секунд и перерисовывается, когда ' +
+      "воркер или телефон что-то дописали. Выключите, если хотите экономить лимиты бесплатного " +
+      "тарифа или смотреть срез на один момент.</span></div></div>" +
       '<div style="margin-top:14px"><button class="btn pri" data-act="settings-save">' + ic("ok") + " Сохранить и перезагрузить</button></div>" +
       "</div>" +
 
@@ -723,8 +757,48 @@
   render();
   DB.loadAll().then(function () {
     loaded = true; render();
+    startLive();
   }, function (err) {
     loaded = true; loadErr = err.message; render();
     toast("Не удалось прочитать данные: " + err.message, "err");
   });
+
+  /* ---------------- живое обновление ---------------- */
+  function refreshLivePill() {
+    var n = document.getElementById("livePill");
+    if (n) n.innerHTML = livePillInner();
+  }
+
+  var livePending = false;
+
+  /* Перерисовка по новым данным — но не из-под рук. Если открыто окно или
+     курсор стоит в поле, набранное слетело бы вместе с фокусом, поэтому
+     ждём, пока пользователь освободится. */
+  function applyLive() {
+    var ae = document.activeElement;
+    var typing = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || "");
+    if (document.querySelector(".ov") || typing) { livePending = true; refreshLivePill(); return; }
+    livePending = false;
+    render();
+  }
+
+  function startLive() {
+    // Каждая сверка освежает плашку: без этого «обновлено только что» висело
+    // бы вечно и тишину нельзя было бы отличить от сломанного опроса.
+    R.LIVE.onTick = function () {
+      refreshLivePill();
+      if (livePending) applyLive();
+    };
+    // Тостом не дёргаем: заказы приходят сами, сообщать об этом каждую минуту незачем.
+    R.LIVE.start(applyLive);
+    render();
+  }
+  window.__startLive = startLive;
+
+  // Вкладку свернули — опрос простаивает; вернулись — сверяемся сразу, не
+  // дожидаясь следующего тика, иначе панель встречает устаревшими цифрами.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && R.LIVE.state === "poll") R.LIVE.tick();
+  });
+
 })();
