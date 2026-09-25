@@ -28,7 +28,7 @@
 
   // Черновик мастера. Ключи не кладём в localStorage раньше, чем человек нажал
   // «Включить»: до этого он ещё может закрыть вкладку и передумать.
-  var D = { url: "", anon: "", svc: "", probe: null, probing: false, err: "" };
+  var D = { url: "", anon: "", svc: "", paste: "", probe: null, probing: false, err: "" };
 
   function boot() {
     if (D.url || D.anon || D.svc) return;
@@ -108,7 +108,12 @@
     boot();
     need();
 
-    var haveKeys = !!(D.url && D.anon && D.svc);
+    // Адреса и публичного ключа хватает, чтобы собрать SQL и код воркера.
+    // Секретный нужен только на шаге 6, для проверки, — и на странице Supabase
+    // он скрыт за «Reveal», так что в скопированное обычно не попадает. Ждать
+    // его, чтобы показать шаги 3–5, значило бы упереться на ровном месте.
+    var haveBase = !!(D.url && D.anon);
+    var haveKeys = !!(haveBase && D.svc);
     var live = DB.settings.driver === "supabase" && DB.settings.sbUrl === D.url;
 
     var h = '<div class="head"><div><h1>Подключение</h1><div class="sub">' +
@@ -121,7 +126,7 @@
     }
 
     /* 1 — проект */
-    h += stepBox(1, "Завести проект Supabase", haveKeys,
+    h += stepBox(1, "Завести проект Supabase", haveBase,
       '<p class="muted">Бесплатный тариф: 500 МБ базы, карта не нужна. Это единственный шаг, ' +
       "который нельзя сделать за вас — регистрация.</p>" +
       '<div style="margin-top:12px"><a class="btn pri" href="https://supabase.com/dashboard/new" ' +
@@ -129,19 +134,30 @@
 
     /* 2 — ключи */
     h += stepBox(2, "Вставить адрес и ключи", haveKeys,
-      '<p class="muted">В проекте: <b>Project Settings → API Keys</b>. Скопируйте оттуда всё ' +
-      "подряд и вставьте сюда — адрес, публичный и секретный ключ разберутся сами.</p>" +
+      '<p class="muted">В проекте: <b>Project Settings → API Keys</b>. Выделите страницу целиком, ' +
+      "скопируйте и вставьте в поле — адрес и публичный ключ разберутся сами, нажимать ничего " +
+      "не нужно.</p>" +
       '<div class="fld" style="margin-top:12px">' +
-      '<textarea id="setupPaste" class="code" rows="4" placeholder="Вставьте сюда содержимое страницы API Keys"></textarea>' +
+      '<textarea id="setupPaste" class="code" rows="4" placeholder="Вставьте сюда содержимое страницы API Keys">' +
+      esc(D.paste || "") + "</textarea>" +
       '<span class="hint">Ключи остаются в этом браузере. Панель отправляет их только в ваш же проект.</span></div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' +
-      '<button class="btn pri" data-act="setup-sniff">' + ic("ok") + " Разобрать</button>" +
-      '<button class="btn" data-act="setup-manual">Ввести по полям</button></div>' +
-      (D.url || D.anon || D.svc ? keysTable() : ""));
+      (D.url || D.anon || D.svc ? keysTable() : "") +
 
-    if (!haveKeys) {
-      h += '<div class="card"><div class="note">Дальше — после шага 2: остальные шаги собираются ' +
-        "из вашего адреса и ключей.</div></div>";
+      // Секретный ключ отдельным полем: на странице Supabase он замаскирован,
+      // и сколько её ни копируй, в буфер попадут точки, а не ключ.
+      '<div class="fld" style="margin-top:14px"><label>Секретный ключ (service_role / secret)</label>' +
+      '<input type="password" id="setupSvc" value="' + esc(D.svc) + '" placeholder="eyJ… или sb_secret_…">' +
+      '<span class="hint">На странице Supabase он спрятан — нажмите там <b>Reveal</b> (или ' +
+      "«Показать»), скопируйте и вставьте сюда. В SQL он не попадает: расписание ходит с " +
+      "публичным ключом. Секретный нужен только для проверки на шаге 6.</span></div>" +
+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
+      '<button class="btn" data-act="setup-sniff">' + ic("ok") + " Разобрать вставленное</button>" +
+      '<button class="btn" data-act="setup-manual">Ввести по полям</button></div>');
+
+    if (!haveBase) {
+      h += '<div class="card"><div class="note">Дальше — как только найдутся <b>адрес проекта</b> и ' +
+        "<b>публичный ключ</b>: остальные шаги собираются из них. Секретный на этом этапе не нужен.</div></div>";
       return h;
     }
 
@@ -183,8 +199,10 @@
       '<p class="muted">Панель переключится на вашу базу и попросит воркер сделать сухой прогон: ' +
       "он прочитает FunPay и покажет, что разобрал, <b>ничего не записав</b>. Это единственный " +
       "способ убедиться, что разбор попал в вашу вёрстку — ваши заказы видны только вам.</p>" +
+      (D.svc ? "" : '<div class="note warn">Для этого шага нужен <b>секретный ключ</b>: им панель ' +
+        "читает вашу базу и спрашивает воркер. Вернитесь к шагу 2 — поле под таблицей.</div>") +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
-      '<button class="btn pri" data-act="setup-go"' + (D.probing ? " disabled" : "") + ">" +
+      '<button class="btn pri" data-act="setup-go"' + (D.probing || !D.svc ? " disabled" : "") + ">" +
       ic("bolt") + (D.probing ? " Проверяю…" : " Включить и проверить") + "</button>" +
       (live ? '<span class="pill ok" style="align-self:center">панель уже на этой базе</span>' : "") +
       "</div>" + probeBox());
@@ -250,21 +268,58 @@
       '<pre class="pre">' + esc(JSON.stringify(d, null, 2)) + "</pre></details>";
   }
 
+  /* ---------------- разбор вставленного ----------------
+     Раньше здесь была кнопка «Разобрать», и это оказалось ловушкой: человек
+     вставляет текст, ничего не происходит, и непонятно, что дальше. Теперь
+     разбор идёт сам на вставку, а кнопка осталась как запасной путь. */
+  function absorb(text, loud) {
+    D.paste = text;
+    var got = sniff(text);
+    var added = (got.url && got.url !== D.url) || (got.anon && got.anon !== D.anon) ||
+      (got.svc && got.svc !== D.svc);
+    if (got.url) D.url = got.url;
+    if (got.anon) D.anon = got.anon;
+    if (got.svc) D.svc = got.svc;
+
+    if (!added) {
+      if (loud) toast("В этом тексте ни адреса, ни ключей не нашлось", "err");
+      return false;
+    }
+    window.__render();
+    var miss = [];
+    if (!D.url) miss.push("адрес проекта");
+    if (!D.anon) miss.push("публичный ключ");
+    if (miss.length) toast("Не хватает: " + miss.join(", "), "warn");
+    else if (!D.svc) toast("Адрес и публичный ключ есть. Секретный — в поле ниже", "ok");
+    else toast("Всё нашлось", "ok");
+    return true;
+  }
+
+  // Слушатель вешается один раз на документ: панель перерисовывает разметку
+  // целиком, и обработчик на самом поле не пережил бы первую же перерисовку.
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (!t || !t.id) return;
+    if (t.id === "setupPaste") { absorb(t.value, false); return; }
+    if (t.id === "setupSvc") {
+      // Перерисовку тут не зовём — иначе фокус улетит на середине вставки.
+      D.svc = t.value.trim();
+      var box = document.querySelector('[data-act="setup-go"]');
+      if (box) box.disabled = !D.svc || D.probing;
+    }
+  });
+
+  // Поле секретного ключа: разблокировать шаг 6 надо сразу, но перерисовать —
+  // только когда человек из поля вышел.
+  document.addEventListener("change", function (e) {
+    if (e.target && e.target.id === "setupSvc") window.__render();
+  });
+
   /* ---------------- действия ---------------- */
   function act(a, el) {
     if (a === "setup-sniff") {
       var ta = document.getElementById("setupPaste");
-      var got = sniff(ta ? ta.value : "");
-      if (!got.url && !got.anon && !got.svc) return toast("Ни адреса, ни ключей не нашлось", "err");
-      if (got.url) D.url = got.url;
-      if (got.anon) D.anon = got.anon;
-      if (got.svc) D.svc = got.svc;
-      window.__render();
-      var miss = [];
-      if (!D.url) miss.push("адрес");
-      if (!D.anon) miss.push("публичный ключ");
-      if (!D.svc) miss.push("секретный ключ");
-      return toast(miss.length ? "Не хватает: " + miss.join(", ") : "Всё нашлось", miss.length ? "warn" : "ok");
+      return absorb(ta ? ta.value : "", true);
     }
 
     if (a === "setup-manual") return manual();
