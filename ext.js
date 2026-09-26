@@ -166,9 +166,13 @@
       карточкаСостояния(s) +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
       '<button class="btn pri" data-act="ext-sync">' + ic("bolt") + " Синхронизировать сейчас</button>" +
+      '<button class="btn" data-act="ext-deep">' + ic("dl") + " Загрузить всю историю</button>" +
       '<a class="btn" href="https://funpay.com/orders/trade" target="_blank" rel="noopener">' +
       ic("link") + " Открыть FunPay</a></div>" +
-      '<div class="note" style="margin-top:12px">Сверка идёт, пока открыта хотя бы одна вкладка ' +
+      '<div class="note" style="margin-top:12px">Обычная сверка берёт только первую страницу ' +
+      "заказов — там всё свежее. <b>Загрузить всю историю</b> дочитывает FunPay до конца: это " +
+      "делается один раз, идёт минутами, и от него зависят цифры за месяц и за всё время.</div>" +
+      '<div class="note" style="margin-top:8px">Сверка идёт, пока открыта хотя бы одна вкладка ' +
       "funpay.com. Все закрыты — расширение подхватит при следующем открытии, ничего не " +
       "потеряется.</div></div>";
 
@@ -220,6 +224,15 @@
       if (!СВОЙ.есть) проверитьМетку();
       window.__render();
       return обновить();
+    }
+    if (a === "ext-deep") {
+      return спросить("sync", { страниц: 200 }).then(function () {
+        toast("Читаю историю — это займёт минуты. Значок покажет прогресс.", "ok");
+        // Глубокий проход долгий: обновляем состояние несколько раз подряд.
+        [5000, 20000, 60000, 120000].forEach(function (мс) {
+          setTimeout(function () { СВОЙ.статус = null; обновить(); }, мс);
+        });
+      }, function (e) { toast("Не вышло: " + e.message, "err"); });
     }
     if (a === "ext-sync") {
       return спросить("sync").then(function () {
