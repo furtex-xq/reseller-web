@@ -1,18 +1,18 @@
 /**
- * Мастер подключения: доводит панель до настоящих заказов с FunPay, стараясь
- * не гонять человека в терминал.
+ * Мастер подключения: доводит панель до настоящих заказов с FunPay.
  *
- * Что здесь делается за пользователя: заполняются оба места в SQL, собирается
- * готовый к вставке код воркера, подставляются прямые ссылки в нужные разделы
- * его проекта, сохраняются настройки и запускается сухой прогон с разбором
- * ответа.
+ * Прошлая версия вела к воркеру на Supabase. Он не заработал, и не из-за кода:
+ * FunPay не признаёт сессию с адреса дата-центра — отвечает 200, отдаёт
+ * нормальную страницу и молча считает гостем. С домашнего адреса та же
+ * последовательность входит. Поэтому заказы теперь носит расширение Chrome,
+ * работающее в вашей же вкладке, а шаги про golden_key отсюда убраны совсем.
  *
- * Что за него сделать нельзя, и почему именно:
- *   — завести проект Supabase: это регистрация, её делает человек;
- *   — golden_key: это ключ от аккаунта FunPay, он идёт из браузера прямо в
- *     секреты Supabase и через панель не проходит вообще;
- *   — DDL: создать таблицы можно только в SQL Editor, через REST схему не
- *     меняют.
+ * Что мастер делает за человека: подставляет его значения в SQL, даёт прямые
+ * ссылки в нужные разделы его проекта, хранит черновик между перезагрузками,
+ * сам проверяет, что уже готово, и в конце — что всё сошлось.
+ *
+ * Чего сделать нельзя: завести проект Supabase (это регистрация) и поставить
+ * расширение (это делает сам Chrome).
  */
 (function () {
   "use strict";
@@ -21,117 +21,65 @@
   var ic = function (n, c) { return window.__ic ? window.__ic(n, c) : ""; };
   var toast = function (t, k) { if (window.__toast) window.__toast(t, k); };
 
-  // Тексты подставляются с сервера при первом открытии вкладки: держать 24 КБ
-  // воркера в самой панели незачем.
-  var FILES = { schema: null, cron: null, worker: null };
+  // Заготовки подтягиваются с сервера при первом открытии вкладки: держать
+  // схему базы внутри панели незачем.
+  var FILES = { schema: null, policies: null };
   var LOADING = false;
 
   var D = {
-    url: "", anon: "", svc: "", paste: "",
+    url: "", anon: "", paste: "",
     probe: null, probing: false, err: "",
-    // Что уже сделано в самом Supabase. Не галочки, которые человек ставит
-    // сам, а то, что мастер проверил запросом: таблицы, воркер, секрет.
     state: null, checking: false,
   };
 
-  // Черновик переживает перезагрузку. Без этого «обновите страницу» стирало
-  // вставленное, и всё начиналось сначала — ровно та ловушка, из-за которой
-  // мастер и казался бесполезным.
+  // Черновик переживает перезагрузку: без этого «обновите страницу» стирало
+  // вставленное, и всё начиналось сначала.
   var DRAFT = "reseller-web:setup";
 
   function saveDraft() {
-    try {
-      localStorage.setItem(DRAFT, JSON.stringify({ url: D.url, anon: D.anon, svc: D.svc }));
-    } catch (e) { /* приватный режим — переживём, просто не сохранится */ }
+    try { localStorage.setItem(DRAFT, JSON.stringify({ url: D.url, anon: D.anon })); }
+    catch (e) { /* приватный режим — переживём */ }
   }
 
   function boot() {
-    if (D.url || D.anon || D.svc) return;
+    if (D.url || D.anon) return;
     try {
       var d = JSON.parse(localStorage.getItem(DRAFT) || "{}");
-      D.url = d.url || ""; D.anon = d.anon || ""; D.svc = d.svc || "";
+      D.url = d.url || ""; D.anon = d.anon || "";
     } catch (e) { /* пусто так пусто */ }
-    // Если панель уже настроена, черновик берём из настроек.
     if (!D.url) D.url = DB.settings.sbUrl || "";
-    if (!D.svc) D.svc = DB.settings.sbKey || "";
+    if (!D.anon) D.anon = DB.settings.sbKey || "";
   }
 
-  /* ---------------- что уже готово ----------------
-     Мастер спрашивает у самого Supabase, а не полагается на память человека:
-     после перезагрузки или через неделю видно, на чём остановились.
+  /* ---------------- адрес и ключ ---------------- */
 
-     Двух запросов хватает на три шага: REST говорит про таблицы, а сухой
-     прогон различает «воркера нет» (404), «воркер есть, секрета нет» и
-     «работает целиком». */
-  function checkAll() {
-    if (!D.url || !D.svc || D.checking) return Promise.resolve(D.state);
-    D.checking = true;
-    var base = String(D.url).replace(/\/+$/, "");
-    var h = { apikey: D.svc, Authorization: "Bearer " + D.svc };
-    var st = { tables: false, fn: false, secret: false, msg: "" };
-
-    var tables = fetch(base + "/rest/v1/orders?select=id&limit=1", { headers: h })
-      .then(function (r) { st.tables = r.ok; }, function () {});
-
-    var worker = fetch(base + "/functions/v1/funpay-sync?dry=1", { headers: h })
-      .then(function (r) {
-        if (r.status === 404) return;            // функция не выложена
-        st.fn = true;
-        return r.json().then(function (j) {
-          if (j && j.ok) { st.secret = true; D.probe = { kind: "ok", data: j }; return; }
-          var m = String((j && j["ошибка"]) || "");
-          st.msg = m;
-          // «нет FUNPAY_GOLDEN_KEY» — воркер жив, не хватает только секрета.
-          st.secret = !/FUNPAY_GOLDEN_KEY/i.test(m);
-        }, function () { /* не JSON — считаем, что функция есть, но отвечает странно */ });
-      }, function () { /* сети нет или CORS — оставляем как есть */ });
-
-    return Promise.all([tables, worker]).then(function () {
-      D.checking = false;
-      D.state = st;
-      window.__render();
-      return st;
-    });
-  }
-
-  /* ---------------- разбор вставленного ----------------
-     На странице «API Keys» в Supabase адрес и ключи лежат рядом, и проще
-     разрешить вставить всё подряд, чем заставлять раскладывать по полям. */
   /**
-   * Адрес проекта из чего угодно, чем человек располагает:
-   *   https://abcdefgh.supabase.co            — как в «Project URL»
-   *   https://supabase.com/dashboard/project/abcdefgh/settings/api — из адресной строки
-   *   abcdefgh                                — просто код проекта
-   * Последнее — на случай «а где этот адрес вообще»: код виден в адресе дашборда.
+   * Адрес проекта из чего угодно: полного URL, ссылки на дашборд или просто
+   * кода проекта. Код виден в адресной строке дашборда — самый частый способ
+   * его узнать, если страница «Project URL» не попалась на глаза.
    */
   function asUrl(text) {
     var s = String(text || "").trim();
     var direct = s.match(/https?:\/\/([a-z0-9-]+)\.supabase\.(co|in)/i);
     if (direct) return "https://" + direct[1].toLowerCase() + ".supabase." + direct[2].toLowerCase();
-    var dashboard = s.match(/supabase\.com\/dashboard\/project\/([a-z0-9-]{16,})/i);
-    if (dashboard) return "https://" + dashboard[1].toLowerCase() + ".supabase.co";
-    // Голый код проекта: ровно он и ничего больше, иначе поймаем случайное слово.
+    var dash = s.match(/supabase\.com\/dashboard\/project\/([a-z0-9-]{16,})/i);
+    if (dash) return "https://" + dash[1].toLowerCase() + ".supabase.co";
     if (/^[a-z]{16,24}$/i.test(s)) return "https://" + s.toLowerCase() + ".supabase.co";
     return "";
   }
 
-  function sniff(text) {
-    var got = { url: "", anon: "", svc: "" };
-    got.url = asUrl(text);
-    // Новые ключи sb_publishable_/sb_secret_, старые — JWT с ролью внутри.
+  /** Публичный ключ из вставленного текста: новый sb_publishable_ или anon-JWT. */
+  function sniffKey(text) {
     var pub = String(text).match(/sb_publishable_[A-Za-z0-9_-]+/);
-    if (pub) got.anon = pub[0];
-    var sec = String(text).match(/sb_secret_[A-Za-z0-9_-]+/);
-    if (sec) got.svc = sec[0];
+    if (pub) return pub[0];
     var jwts = String(text).match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g) || [];
-    jwts.forEach(function (j) {
-      var role = "";
-      try { role = JSON.parse(atob(j.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).role || ""; }
-      catch (e) { return; }
-      if (role === "anon" && !got.anon) got.anon = j;
-      if (role === "service_role" && !got.svc) got.svc = j;
-    });
-    return got;
+    for (var i = 0; i < jwts.length; i++) {
+      try {
+        var role = JSON.parse(atob(jwts[i].split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).role;
+        if (role === "anon") return jwts[i];
+      } catch (e) { /* не тот токен */ }
+    }
+    return "";
   }
 
   function ref() {
@@ -143,7 +91,7 @@
     return r ? "https://supabase.com/dashboard/project/" + r + path : "";
   }
 
-  /* ---------------- загрузка заготовок ---------------- */
+  /* ---------------- заготовки ---------------- */
   function need() {
     if (FILES.schema || LOADING) return;
     LOADING = true;
@@ -152,26 +100,53 @@
         .then(function (r) { if (!r.ok) throw new Error(f + ": HTTP " + r.status); return r.text(); })
         .then(function (t) { FILES[k] = t; });
     };
-    Promise.all([one("schema", "schema.sql"), one("cron", "cron.sql"), one("worker", "worker.ts")])
+    Promise.all([one("schema", "schema.sql"), one("policies", "policies.sql")])
       .then(function () { LOADING = false; window.__render(); },
         function (e) { LOADING = false; D.err = e.message; window.__render(); });
   }
 
-  /** Полный SQL: схема и расписание, оба места уже подставлены. */
+  /** Весь SQL одним куском: таблицы и правила доступа. */
   function sql() {
-    if (!FILES.schema || !FILES.cron) return "";
-    var cron = FILES.cron
-      .replace(/__PROJECT_URL__/g, String(D.url).replace(/\/+$/, ""))
-      .replace(/__ANON_KEY__/g, D.anon || "ВСТАВЬТЕ_ANON_КЛЮЧ");
-    return "-- Собрано мастером панели Reseller Web. Выполнять целиком, один раз.\n\n" +
-      FILES.schema + "\n\n" + cron;
+    if (!FILES.schema || !FILES.policies) return "";
+    return "-- Собрано мастером панели Reseller Web. Выполнять целиком, один раз.\n" +
+      "-- Проект: " + String(D.url).replace(/\/+$/, "") + "\n\n" +
+      FILES.schema + "\n\n" + FILES.policies;
   }
 
-  /* ---------------- шаги ---------------- */
-  function stepBox(n, title, done, body, extra) {
+  /* ---------------- что уже готово ----------------
+     Спрашиваем у самого Supabase, а не полагаемся на память человека: после
+     перезагрузки или через неделю видно, на чём остановились. */
+  function checkAll() {
+    if (!D.url || !D.anon || D.checking) return Promise.resolve(D.state);
+    D.checking = true;
+    var base = String(D.url).replace(/\/+$/, "");
+    var st = { tables: false, auth: false, rows: 0 };
+
+    return R.AUTH.bearer(base, D.anon).then(function (tok) {
+      st.auth = !!tok;
+      return fetch(base + "/rest/v1/orders?select=id&limit=1", {
+        headers: { apikey: D.anon, Authorization: "Bearer " + (tok || D.anon) },
+      });
+    }).then(function (r) {
+      // 404 — таблицы нет. 200 с пустотой при отсутствии входа — это RLS,
+      // а не пустая база, поэтому «есть таблицы» и «есть доступ» считаем порознь.
+      st.tables = r.status !== 404;
+      if (r.ok) return r.json().then(function (rows) { st.rows = rows.length; });
+    }).catch(function () { /* сети нет — оставим как есть */ })
+      .then(function () {
+        D.checking = false;
+        D.state = st;
+        window.__render();
+        return st;
+      });
+  }
+
+  /* ---------------- разметка ---------------- */
+
+  function stepBox(n, title, done, body) {
     return '<div class="card' + (done ? " ok" : "") + '">' +
-      '<h2><span class="stepn' + (done ? " on" : "") + '">' + (done ? "✓" : n) + "</span>" + esc(title) + "</h2>" +
-      (extra || "") + body + "</div>";
+      '<h2><span class="stepn' + (done ? " on" : "") + '">' + (done ? "✓" : n) + "</span>" +
+      esc(title) + "</h2>" + body + "</div>";
   }
 
   function copyBtn(what, label) {
@@ -179,46 +154,56 @@
       ic("ul") + " " + esc(label) + "</button>";
   }
 
-  /** Короткая сводка сверху: что мастер увидел в вашем проекте. */
+  function short(v) {
+    v = String(v);
+    return v.length > 34 ? v.slice(0, 16) + "…" + v.slice(-8) : v;
+  }
+
+  function keysTable() {
+    var A = R.AUTH;
+    var row = function (t, v, ok) {
+      return "<tr><td>" + esc(t) + "</td><td>" +
+        (v ? '<span class="pill ok">' + esc(ok) + "</span>" : '<span class="pill mute">нет</span>') +
+        '</td><td class="t-title muted">' + esc(v ? short(v) : "—") + "</td></tr>";
+    };
+    return '<div class="tw" style="margin-top:12px"><table><tbody>' +
+      row("Адрес проекта", D.url, "есть") +
+      row("Публичный ключ", D.anon, "есть") +
+      row("Вход", A.ok() ? (A.email || "выполнен") : "", "выполнен") +
+      "</tbody></table></div>";
+  }
+
   function progressNote(st) {
     var left = [];
     if (!st.tables) left.push("шаг 3 — таблицы");
-    if (!st.fn) left.push("шаг 4 — воркер");
-    else if (!st.secret) left.push("шаг 5 — golden_key");
+    if (!st.auth) left.push("шаг 4 — вход");
     if (!left.length) {
-      return '<div class="note ok">В проекте уже всё на месте: таблицы, воркер и секрет. ' +
-        "Осталось нажать «Включить и проверить» внизу.</div>";
+      return '<div class="note ok">В проекте всё на месте: таблицы созданы, вход работает. ' +
+        "Осталось поставить расширение и открыть FunPay.</div>";
     }
-    return '<div class="note">Проверено в вашем проекте. Осталось: <b>' + esc(left.join(", ")) +
-      "</b>." + (st.msg ? " Воркер говорит: " + esc(st.msg) : "") + "</div>";
+    return '<div class="note">Проверено в вашем проекте. Осталось: <b>' + esc(left.join(", ")) + "</b>.</div>";
   }
 
   function view() {
     boot();
     need();
 
-    // Адреса и публичного ключа хватает, чтобы собрать SQL и код воркера.
-    // Секретный нужен только на шаге 6, для проверки, — и на странице Supabase
-    // он скрыт за «Reveal», так что в скопированное обычно не попадает. Ждать
-    // его, чтобы показать шаги 3–5, значило бы упереться на ровном месте.
     var haveBase = !!(D.url && D.anon);
-    var haveKeys = !!(haveBase && D.svc);
-    var live = DB.settings.driver === "supabase" && DB.settings.sbUrl === D.url;
+    var A = R.AUTH;
     var st = D.state || {};
 
-    // Первый заход с готовыми ключами — сразу спрашиваем, что уже сделано.
-    if (haveKeys && !D.state && !D.checking) setTimeout(checkAll, 0);
+    if (haveBase && !D.state && !D.checking) setTimeout(checkAll, 0);
 
     var h = '<div class="head"><div><h1>Подключение</h1><div class="sub">' +
       "Чтобы в панели были настоящие заказы с FunPay. Всё бесплатно и без карты." +
       "</div></div>" +
-      (haveKeys
+      (haveBase
         ? '<span class="grow"></span><button class="btn" data-act="setup-check"' +
           (D.checking ? " disabled" : "") + ">" + ic("ok") +
           (D.checking ? " Проверяю…" : " Проверить, что уже готово") + "</button>"
         : "") +
       "</div>" +
-      (haveKeys && D.state ? progressNote(st) : "");
+      (haveBase && D.state ? progressNote(st) : "");
 
     if (D.err) {
       h += '<div class="card"><div class="note err">Заготовки не загрузились: ' + esc(D.err) +
@@ -232,125 +217,94 @@
       '<div style="margin-top:12px"><a class="btn pri" href="https://supabase.com/dashboard/new" ' +
       'target="_blank" rel="noopener">' + ic("link") + " Открыть Supabase</a></div>");
 
-    /* 2 — ключи */
-    h += stepBox(2, "Вставить адрес и ключи", haveKeys,
-      '<p class="muted">В проекте: <b>Project Settings → API Keys</b>. Выделите страницу целиком, ' +
-      "скопируйте и вставьте в поле — адрес и публичный ключ разберутся сами, нажимать ничего " +
-      "не нужно.</p>" +
+    /* 2 — адрес и ключ */
+    h += stepBox(2, "Вставить адрес и публичный ключ", haveBase,
+      '<p class="muted">В проекте: <b>Project Settings → API Keys</b>. Выделите страницу целиком ' +
+      "и вставьте сюда — адрес и ключ разберутся сами, нажимать ничего не нужно.</p>" +
       '<div class="fld" style="margin-top:12px">' +
-      '<textarea id="setupPaste" class="code" rows="4" placeholder="Вставьте сюда содержимое страницы API Keys">' +
-      esc(D.paste || "") + "</textarea>" +
-      '<span class="hint">Ключи остаются в этом браузере. Панель отправляет их только в ваш же проект.</span></div>' +
-      (D.url || D.anon || D.svc ? keysTable() : "") +
-
-      // Адрес отдельным полем: в новых проектах он лежит не на странице с
-      // ключами, а в «Data API», так что во вставленное часто не попадает.
+      '<textarea id="setupPaste" class="code" rows="4" ' +
+      'placeholder="Вставьте сюда содержимое страницы API Keys">' + esc(D.paste || "") + "</textarea>" +
+      '<span class="hint">Нужен <b>публичный</b> ключ. Секретный Supabase в браузере запрещает ' +
+      "прямым текстом: «Secret API keys should never be used in a browser».</span></div>" +
+      (D.url || D.anon ? keysTable() : "") +
       '<div class="fld" style="margin-top:14px"><label>Адрес проекта</label>' +
       '<input type="text" id="setupUrl" value="' + esc(D.url) + '" ' +
       'placeholder="https://xxxxxxxx.supabase.co или просто код проекта">' +
-      '<span class="hint"><b>Project Settings → Data API → Project URL</b>. Или проще: ' +
-      "посмотрите на адрес дашборда — <code>supabase.com/dashboard/project/<b>КОД</b></code>, " +
-      "и вставьте сюда этот КОД, остальное допишется.</span></div>" +
-
-      // Секретный ключ отдельным полем: на странице Supabase он замаскирован,
-      // и сколько её ни копируй, в буфер попадут точки, а не ключ.
-      '<div class="fld" style="margin-top:14px"><label>Секретный ключ (service_role / secret)</label>' +
-      '<input type="password" id="setupSvc" value="' + esc(D.svc) + '" placeholder="eyJ… или sb_secret_…">' +
-      '<span class="hint">На странице Supabase он спрятан — нажмите там <b>Reveal</b> (или ' +
-      "«Показать»), скопируйте и вставьте сюда. В SQL он не попадает: расписание ходит с " +
-      "публичным ключом. Секретный нужен только для проверки на шаге 6.</span></div>" +
-
+      '<span class="hint"><b>Project Settings → Data API → Project URL</b>. Или проще: посмотрите ' +
+      "на адрес дашборда — <code>supabase.com/dashboard/project/<b>КОД</b></code>, вставьте КОД.</span></div>" +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
-      '<button class="btn" data-act="setup-sniff">' + ic("ok") + " Разобрать вставленное</button>" +
-      '<button class="btn" data-act="setup-manual">Ввести по полям</button></div>');
+      '<button class="btn" data-act="setup-sniff">' + ic("ok") + " Разобрать вставленное</button></div>");
 
     if (!haveBase) {
-      h += '<div class="card"><div class="note">Дальше — как только найдутся <b>адрес проекта</b> и ' +
-        "<b>публичный ключ</b>: остальные шаги собираются из них. Секретный на этом этапе не нужен.</div></div>";
+      h += '<div class="card"><div class="note">Дальше — как только найдутся адрес и публичный ' +
+        "ключ: остальные шаги собираются из них.</div></div>";
       return h;
     }
 
     /* 3 — SQL */
-    h += stepBox(3, "Создать таблицы и расписание", !!st.tables,
-      '<p class="muted">Один запрос: таблицы, крон раз в минуту и уборка за ним. Оба места в ' +
-      "шаблоне уже подставлены — ничего дописывать не нужно.</p>" +
+    h += stepBox(3, "Создать таблицы и права", !!st.tables,
+      '<p class="muted">Один запрос: таблицы под товары, склад, заказы и чаты, плюс правила ' +
+      "доступа — они открывают данные тому, кто вошёл, и закрывают всем остальным.</p>" +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
       copyBtn("sql", "Скопировать SQL") +
       '<a class="btn pri" href="' + dash("/sql/new") + '" target="_blank" rel="noopener">' +
       ic("link") + " Открыть SQL Editor</a></div>" +
       '<details style="margin-top:12px"><summary class="muted">Посмотреть, что там</summary>' +
-      '<pre class="pre">' + esc((sql() || "загружается…").slice(0, 1400)) + "\n…</pre></details>");
+      '<pre class="pre">' + esc((sql() || "загружается…").slice(0, 1200)) + "\n…</pre></details>");
 
-    /* 4 — воркер */
-    h += stepBox(4, "Выложить воркер", !!st.fn,
-      '<p class="muted">Это та часть, которая ходит на FunPay: панель из браузера туда не ' +
-      "попадёт никогда. В Supabase: <b>Edge Functions → Deploy a new function</b>, имя строго " +
-      "<code>funpay-sync</code>, содержимое — одним файлом.</p>" +
+    /* 4 — пользователь и вход */
+    h += stepBox(4, "Завести себе вход", !!A.ok(),
+      A.ok()
+        ? '<div class="note ok">Вход выполнен: <b>' + esc(A.email || "—") + "</b>" +
+          '<div style="margin-top:10px"><button class="btn sm" data-act="auth-out">Выйти</button></div></div>'
+        : '<p class="muted">Панель и расширение ходят в базу публичным ключом, а доступ даёт ' +
+          "вход. Заведите себе пользователя один раз: <b>Authentication → Users → Add user → " +
+          "Create new user</b>, обязательно с галкой <b>Auto Confirm User</b>. Почта может быть " +
+          "любой, писем никто не шлёт.</p>" +
+          '<div style="margin-top:12px"><a class="btn" href="' + dash("/auth/users") +
+          '" target="_blank" rel="noopener">' + ic("link") + " Открыть Authentication</a></div>" +
+          '<div class="fld" style="margin-top:14px"><label>Почта</label>' +
+          '<input type="email" id="setupMail" value="' + esc(A.email) + '"></div>' +
+          '<div class="fld" style="margin-top:10px"><label>Пароль</label>' +
+          '<input type="password" id="setupPass">' +
+          '<span class="hint">Пароль не сохраняется: после входа остаётся только выданный ' +
+          "токен, и просроченный обновляется сам.</span></div>" +
+          '<div style="margin-top:10px"><button class="btn pri" data-act="setup-signin">' +
+          ic("lock") + " Войти</button></div>");
+
+    /* 5 — расширение */
+    h += stepBox(5, "Поставить расширение Chrome", false,
+      '<p class="muted">Оно и носит заказы с FunPay. Ключ FunPay ему не нужен: расширение ' +
+      "работает в вашем же браузере, где вы уже вошли.</p>" +
+      '<div class="note">Почему не сервер: FunPay не признаёт сессию с адреса дата-центра. ' +
+      "Отвечает <code>200</code>, отдаёт нормальную страницу — и считает гостем. С домашнего " +
+      "адреса та же последовательность входит. Это измерено, а не предположено.</div>" +
+      '<ol class="steps"><li>Скачать и распаковать архив в любую постоянную папку.</li>' +
+      "<li>Открыть <code>chrome://extensions</code>, включить <b>Режим разработчика</b>.</li>" +
+      "<li><b>Загрузить распакованное расширение</b> → выбрать эту папку.</li>" +
+      "<li>В настройках расширения нажать «Разобрать из буфера» и войти той же почтой.</li>" +
+      "<li>Открыть funpay.com — значок покажет, сколько заказов уехало.</li></ol>" +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
-      copyBtn("worker", "Скопировать код воркера") +
-      '<a class="btn pri" href="' + dash("/functions") + '" target="_blank" rel="noopener">' +
-      ic("link") + " Открыть Edge Functions</a></div>");
+      '<a class="btn pri" href="setup/reseller-funpay-ext.zip" download>' + ic("dl") +
+      " Скачать расширение</a>" +
+      "</div>" +
+      '<div class="note warn" style="margin-top:12px">Пока открыта хотя бы одна вкладка ' +
+      "funpay.com — заказы идут сами. Все закрыты — расширение подхватит при следующем " +
+      "открытии, ничего не потеряется.</div>");
 
-    /* 5 — golden_key */
-    h += stepBox(5, "Отдать воркеру cookie сессии", !!(st.fn && st.secret),
-      '<p class="muted">Воркеру нужен <code>golden_key</code> — cookie вашей сессии на FunPay. ' +
-      "Нужен компьютер, с телефона так не достать.</p>" +
-      '<ol class="steps"><li>Открыть <b>funpay.com</b> и убедиться, что вы вошли.</li>' +
-      "<li>Нажать <b>F12</b>.</li>" +
-      "<li><b>Chrome / Edge:</b> вкладка <b>Application</b> («Приложение», может прятаться под " +
-      "<code>»</code>) → слева <b>Storage → Cookies → https://funpay.com</b>.<br>" +
-      "<b>Firefox:</b> вкладка <b>Хранилище</b> → <b>Куки</b> → <code>https://funpay.com</code>.</li>" +
-      "<li>Найти строку <code>golden_key</code>, дважды щёлкнуть по её значению в столбце " +
-      "<b>Value</b> и скопировать. В Firefox — правой кнопкой, «Копировать значение».</li></ol>" +
-      '<div class="note">Длинная строка букв и цифр, около 32 символов. Быстрая проверка: ' +
-      "введите в консоли <code>document.cookie</code> — если <code>golden_key</code> там виден, " +
-      "копируйте прямо оттуда; если нет, он закрыт от скриптов, и путь только через Application.</div>" +
-      '<div class="note warn">Вставляйте его в Supabase напрямую, не сюда и никому не присылайте. ' +
-      "В отличие от ключей Supabase это доступ к аккаунту FunPay: переписка, лоты, сделки. " +
-      "Через панель он не проходит и в ней не хранится.</div>" +
-      '<p class="muted" style="margin-top:10px">В разделе секретов: <b>Add new secret</b>, имя ' +
-      "<code>FUNPAY_GOLDEN_KEY</code>, значение — скопированное.</p>" +
-      '<div class="note">Не выходите из FunPay на том компьютере, откуда взяли ключ: выход убивает ' +
-      "сессию, и воркер начнёт отвечать «golden_key не подошёл или истёк». Тогда возьмите новый " +
-      "тем же способом.</div>" +
-      '<div style="margin-top:12px"><a class="btn pri" href="' + dash("/settings/functions") +
-      '" target="_blank" rel="noopener">' + ic("lock") + " Открыть секреты функций</a></div>");
-
-    /* 6 — включить и проверить */
-    h += stepBox(6, "Включить и проверить", live,
-      '<p class="muted">Панель переключится на вашу базу и попросит воркер сделать сухой прогон: ' +
-      "он прочитает FunPay и покажет, что разобрал, <b>ничего не записав</b>. Это единственный " +
-      "способ убедиться, что разбор попал в вашу вёрстку — ваши заказы видны только вам.</p>" +
-      (D.svc ? "" : '<div class="note warn">Для этого шага нужен <b>секретный ключ</b>: им панель ' +
-        "читает вашу базу и спрашивает воркер. Вернитесь к шагу 2 — поле под таблицей.</div>") +
+    /* 6 — проверка */
+    h += stepBox(6, "Убедиться, что всё сошлось", false,
+      '<p class="muted">Панель перечитает вашу базу и покажет, что в ней лежит. Если расширение ' +
+      "уже отработало — здесь появятся настоящие заказы.</p>" +
+      (A.ok() ? "" : '<div class="note warn">Сначала шаг 4: без входа Supabase ничего не покажет.</div>') +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
-      '<button class="btn pri" data-act="setup-go"' + (D.probing || !D.svc ? " disabled" : "") + ">" +
-      ic("bolt") + (D.probing ? " Проверяю…" : " Включить и проверить") + "</button>" +
-      (live ? '<span class="pill ok" style="align-self:center">панель уже на этой базе</span>' : "") +
-      "</div>" + probeBox());
+      '<button class="btn pri" data-act="setup-go"' + (D.probing || !A.ok() ? " disabled" : "") + ">" +
+      ic("bolt") + (D.probing ? " Проверяю…" : " Включить и проверить") + "</button></div>" +
+      probeBox());
 
     return h;
   }
 
-  function keysTable() {
-    var row = function (t, v, ok) {
-      return "<tr><td>" + esc(t) + "</td><td>" +
-        (v ? '<span class="pill ok">' + esc(ok) + "</span>" : '<span class="pill mute">нет</span>') +
-        '</td><td class="t-title muted">' + esc(v ? short(v) : "—") + "</td></tr>";
-    };
-    return '<div class="tw" style="margin-top:12px"><table><tbody>' +
-      row("Адрес проекта", D.url, "есть") +
-      row("Публичный ключ (anon)", D.anon, "есть") +
-      row("Секретный ключ (service_role)", D.svc, "есть") +
-      "</tbody></table></div>";
-  }
-
-  function short(v) {
-    v = String(v);
-    return v.length > 34 ? v.slice(0, 16) + "…" + v.slice(-8) : v;
-  }
-
-  /* ---------------- разбор ответа сухого прогона ---------------- */
   function probeBox() {
     var p = D.probe;
     if (!p) return "";
@@ -358,113 +312,56 @@
       return '<div class="note err" style="margin-top:12px"><b>Не вышло.</b> ' + esc(p.msg) +
         (p.hint ? "<br><br>" + p.hint : "") + "</div>";
     }
-    var d = p.data || {};
-    var n = d["заказовНайдено"];
-    if (!n) {
-      return '<div class="note warn" style="margin-top:12px"><b>Воркер отвечает, но заказов не ' +
-        "нашёл.</b> Либо продаж пока нет, либо FunPay отдал страницу не так, как ждёт разбор. " +
-        "Полный ответ ниже.</div>" + dump(d);
+    if (!p.orders) {
+      return '<div class="note warn" style="margin-top:12px"><b>База читается, но заказов в ней ' +
+        "пока нет.</b> Так и должно быть, если расширение ещё не отработало: поставьте его и " +
+        "откройте вкладку funpay.com, потом нажмите проверку ещё раз.</div>";
     }
-    var rows = (d["заказы"] || []).map(function (o) {
-      return "<tr><td>" + esc(o.external_id || "—") + "</td>" +
-        '<td class="t-title">' + esc((o.title_raw || "—").slice(0, 40)) + "</td>" +
-        "<td>" + esc(o.buyer_name || "—") + "</td>" +
-        "<td>" + esc(o.status || "") + "</td>" +
-        "<td>" + esc((o.amount != null ? o.amount : "") + " " + (o.currency || "")) + "</td>" +
-        "<td>" + esc((o.created_at || "—").slice(0, 16).replace("T", " ")) + "</td></tr>";
-    }).join("");
-    var bad = d["неразобранныхЯчеек"];
-    return '<div class="note ok" style="margin-top:12px"><b>Работает: заказов ' + esc(n) +
-      ".</b> В базу пока ничего не записано — это сухой прогон. Крон из шага 3 запишет сам, " +
-      "в течение минуты.</div>" +
-      '<div class="tw" style="margin-top:10px"><table><thead><tr><th>заказ</th><th>товар</th>' +
-      "<th>покупатель</th><th>статус</th><th>сумма</th><th>дата</th></tr></thead><tbody>" +
-      rows + "</tbody></table></div>" +
-      (bad ? '<div class="note warn" style="margin-top:10px">Не разобралось ячеек: ' + esc(bad) +
-        ". Вёрстка FunPay отличается от ожидаемой. В полном ответе ниже есть сырые ячейки — " +
-        "по ним правится <code>FIELD</code> в начале воркера.</div>" + dump(d) : "");
+    return '<div class="note ok" style="margin-top:12px"><b>Готово: заказов в базе ' +
+      esc(p.orders) + ".</b> Панель настроена — загляните на вкладку «Заказы».</div>";
   }
 
-  function dump(d) {
-    return '<details style="margin-top:10px"><summary class="muted">Полный ответ воркера</summary>' +
-      '<pre class="pre">' + esc(JSON.stringify(d, null, 2)) + "</pre></details>";
-  }
+  /* ---------------- разбор вставленного ---------------- */
 
-  /* ---------------- разбор вставленного ----------------
-     Раньше здесь была кнопка «Разобрать», и это оказалось ловушкой: человек
-     вставляет текст, ничего не происходит, и непонятно, что дальше. Теперь
-     разбор идёт сам на вставку, а кнопка осталась как запасной путь. */
   function absorb(text, loud) {
     D.paste = text;
-    var got = sniff(text);
-    var added = (got.url && got.url !== D.url) || (got.anon && got.anon !== D.anon) ||
-      (got.svc && got.svc !== D.svc);
-    if (got.url) D.url = got.url;
-    if (got.anon) D.anon = got.anon;
-    if (got.svc) D.svc = got.svc;
+    var u = asUrl(text), k = sniffKey(text);
+    var added = (u && u !== D.url) || (k && k !== D.anon);
+    if (u) D.url = u;
+    if (k) D.anon = k;
     saveDraft();
 
     if (!added) {
-      if (loud) toast("В этом тексте ни адреса, ни ключей не нашлось", "err");
+      if (loud) toast("В этом тексте ни адреса, ни публичного ключа не нашлось", "err");
       return false;
     }
+    D.state = null;
     window.__render();
     var miss = [];
     if (!D.url) miss.push("адрес проекта");
     if (!D.anon) miss.push("публичный ключ");
-    if (miss.length) toast("Не хватает: " + miss.join(", "), "warn");
-    else if (!D.svc) toast("Адрес и публичный ключ есть. Секретный — в поле ниже", "ok");
-    else toast("Всё нашлось", "ok");
+    toast(miss.length ? "Не хватает: " + miss.join(", ") : "Адрес и ключ на месте",
+      miss.length ? "warn" : "ok");
     return true;
   }
 
-  // Слушатель вешается один раз на документ: панель перерисовывает разметку
-  // целиком, и обработчик на самом поле не пережил бы первую же перерисовку.
+  // Слушатели вешаются один раз на документ: панель перерисовывает разметку
+  // целиком, и обработчик на самом поле не пережил бы первую перерисовку.
   document.addEventListener("input", function (e) {
     var t = e.target;
     if (!t || !t.id) return;
     if (t.id === "setupPaste") { absorb(t.value, false); return; }
     if (t.id === "setupUrl") {
-      // Перерисовку не зовём, пока человек печатает: иначе фокус улетит.
+      // Перерисовку не зовём, пока печатают: иначе фокус улетит.
       D.url = asUrl(t.value) || "";
       saveDraft();
-      return;
-    }
-    if (t.id === "setupSvc") {
-      // Перерисовку тут не зовём — иначе фокус улетит на середине вставки.
-      D.svc = t.value.trim();
-      saveDraft();
-      var box = document.querySelector('[data-act="setup-go"]');
-      if (box) box.disabled = !D.svc || D.probing;
     }
   });
-
-  // Поле секретного ключа: разблокировать шаг 6 надо сразу, но перерисовать —
-  // только когда человек из поля вышел.
   document.addEventListener("change", function (e) {
-    if (e.target && (e.target.id === "setupSvc" || e.target.id === "setupUrl")) window.__render();
+    if (e.target && e.target.id === "setupUrl") { D.state = null; window.__render(); }
   });
 
   /* ---------------- действия ---------------- */
-  function act(a, el) {
-    if (a === "setup-sniff") {
-      var ta = document.getElementById("setupPaste");
-      return absorb(ta ? ta.value : "", true);
-    }
-
-    if (a === "setup-check") { D.state = null; window.__render(); return checkAll(); }
-
-    if (a === "setup-manual") return manual();
-
-    if (a === "setup-copy") {
-      var what = el ? el.getAttribute("data-what") : "";
-      var text = what === "sql" ? sql() : FILES.worker || "";
-      if (!text) return toast("Заготовка ещё не загрузилась", "err");
-      return copy(text, what === "sql" ? "SQL скопирован" : "Код воркера скопирован");
-    }
-
-    if (a === "setup-go") return go();
-  }
 
   function copy(text, okMsg) {
     var done = function () { toast(okMsg, "ok"); };
@@ -481,90 +378,69 @@
     } else fallback();
   }
 
-  function manual() {
-    if (!window.__modal) return toast("Вставьте текст в поле выше", "warn");
-    window.__modal({
-      title: "Адрес и ключи по полям",
-      wide: true,
-      body:
-        '<div class="fld"><label>Адрес проекта</label>' +
-        '<input type="text" id="mUrl" value="' + esc(D.url) + '" placeholder="https://xxxx.supabase.co"></div>' +
-        '<div class="fld" style="margin-top:10px"><label>Публичный ключ (anon / publishable)</label>' +
-        '<input type="text" id="mAnon" value="' + esc(D.anon) + '"></div>' +
-        '<div class="fld" style="margin-top:10px"><label>Секретный ключ (service_role / secret)</label>' +
-        '<input type="password" id="mSvc" value="' + esc(D.svc) + '">' +
-        '<span class="hint">Публичный уходит в SQL расписания, секретный — только в этот браузер.</span></div>',
-      onOk: function (ov) {
-        var g = function (id) { var e = ov.querySelector("#" + id); return e ? e.value.trim() : ""; };
-        D.url = g("mUrl").replace(/\/+$/, ""); D.anon = g("mAnon"); D.svc = g("mSvc");
-        saveDraft();
-        window.__closeModal();
-        window.__render();
-        toast("Записал", "ok");
-      },
+  /** Вход прямо из мастера: адрес и ключ берём из полей, даже не сохранённых. */
+  function signIn() {
+    var g = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ""; };
+    var mail = g("setupMail");
+    var pass = (document.getElementById("setupPass") || {}).value || "";
+    if (!D.url || !D.anon) return toast("Сначала адрес и публичный ключ", "err");
+    if (!mail || !pass) return toast("Нужны почта и пароль", "err");
+
+    toast("Вхожу…");
+    R.AUTH.signIn(D.url, D.anon, mail, pass).then(function () {
+      var s = Object.assign({}, DB.settings, { driver: "supabase", sbUrl: D.url, sbKey: D.anon });
+      DB.useSettings(s);
+      return DB.loadAll();
+    }).then(function () {
+      D.state = null;
+      window.__render();
+      if (window.__startLive) window.__startLive();
+      toast("Вход выполнен", "ok");
+      checkAll();
+    }, function (e) {
+      window.__render();
+      toast("Войти не вышло: " + e.message, "err");
     });
   }
 
-  /** Включить базу и попросить воркер о сухом прогоне. */
   function go() {
-    if (!D.url || !D.svc) return toast("Нужны адрес и секретный ключ", "err");
-
-    var s = Object.assign({}, DB.settings, { driver: "supabase", sbUrl: D.url, sbKey: D.svc });
-    DB.useSettings(s);
-
+    if (!R.AUTH.ok()) return toast("Сначала войдите, шаг 4", "err");
     D.probing = true; D.probe = null; window.__render();
 
-    var finish = function (probe) {
-      D.probing = false; D.probe = probe; window.__render();
-    };
+    var s = Object.assign({}, DB.settings, { driver: "supabase", sbUrl: D.url, sbKey: D.anon });
+    DB.useSettings(s);
 
     DB.loadAll().then(function () {
+      D.probing = false;
+      D.probe = { kind: "ok", orders: DB.get("orders").length };
+      window.__render();
       if (window.__startLive) window.__startLive();
     }, function (e) {
-      // База не прочиталась — почти всегда это «шаг 3 ещё не выполнен».
-      finish({
+      D.probing = false;
+      D.probe = {
         kind: "err", msg: e.message,
-        hint: /404|does not exist|relation/i.test(e.message)
-          ? "Похоже, таблиц ещё нет: вернитесь к шагу 3 и выполните SQL."
-          : "Проверьте адрес и секретный ключ из шага 2.",
-      });
-      throw e;
-    }).then(function () {
-      return fetch(D.url.replace(/\/+$/, "") + "/functions/v1/funpay-sync?dry=1", {
-        headers: { Authorization: "Bearer " + D.svc, apikey: D.svc },
-      });
-    }).then(function (r) {
-      return r.text().then(function (t) {
-        var j = null;
-        try { j = JSON.parse(t); } catch (e) { /* не JSON — покажем как есть */ }
-        if (r.status === 404) {
-          return finish({
-            kind: "err", msg: "воркер не найден (404)",
-            hint: "Вернитесь к шагу 4: функция должна называться строго <code>funpay-sync</code>.",
-          });
-        }
-        if (j && j.ok === false) {
-          var m = String(j["ошибка"] || "неизвестная ошибка");
-          var hint = /golden_key|гостю|форму входа/i.test(m)
-            ? "Это шаг 5: секрет <code>FUNPAY_GOLDEN_KEY</code> не задан или ключ уже истёк."
-            : /защитную проверку/i.test(m)
-            ? "FunPay не пускает адреса дата-центров. Этот путь для вас закрыт — остаётся автопуш с телефона."
-            : /вёрстка изменилась/i.test(m)
-            ? "FunPay переделал страницу. Нужно поправить <code>FIELD</code> в начале воркера."
-            : "";
-          return finish({ kind: "err", msg: m, hint: hint });
-        }
-        if (!j) return finish({ kind: "err", msg: "воркер ответил не JSON: " + t.slice(0, 200) });
-        return finish({ kind: "ok", data: j });
-      });
-    }).catch(function (e) {
-      if (D.probing) {
-        finish({
-          kind: "err", msg: e.message,
-          hint: "Если написано про сеть или CORS — проверьте, что воркер из шага 4 выложен.",
-        });
-      }
+        hint: /таблиц/i.test(e.message) ? "Вернитесь к шагу 3 и выполните SQL."
+          : /войти|вход/i.test(e.message) ? "Вернитесь к шагу 4."
+          : "Проверьте адрес и публичный ключ из шага 2.",
+      };
+      window.__render();
     });
+  }
+
+  function act(a, el) {
+    if (a === "setup-sniff") {
+      var ta = document.getElementById("setupPaste");
+      return absorb(ta ? ta.value : "", true);
+    }
+    if (a === "setup-check") { D.state = null; window.__render(); return checkAll(); }
+    if (a === "setup-signin") return signIn();
+    if (a === "setup-go") return go();
+    if (a === "setup-copy") {
+      var what = el ? el.getAttribute("data-what") : "";
+      var text = what === "sql" ? sql() : "";
+      if (!text) return toast("Заготовка ещё не загрузилась", "err");
+      return copy(text, "SQL скопирован");
+    }
   }
 
   window.__setupView = view;

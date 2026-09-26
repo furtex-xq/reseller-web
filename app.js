@@ -100,6 +100,26 @@
       Math.round(L.ms / 1000) + ' с">' + t + "</span>";
   }
 
+  /* Вход в Supabase. Показываем не «вы вошли», а под кем именно: почта сразу
+     отвечает на вопрос «а тот ли это проект», если их несколько. */
+  function authBox() {
+    var A = R.AUTH;
+    if (A.ok()) {
+      return '<div class="note ok" style="margin-top:12px">Вход выполнен: <b>' +
+        esc(A.email || "—") + "</b>" +
+        '<div style="margin-top:10px"><button class="btn sm" data-act="auth-out">Выйти</button></div></div>';
+    }
+    return '<div class="fld" style="margin-top:12px"><label>Почта</label>' +
+      '<input type="email" id="setMail" value="' + esc(A.email) +
+      '" placeholder="та, что завели в Authentication -> Users"></div>' +
+      '<div class="fld" style="margin-top:10px"><label>Пароль</label>' +
+      '<input type="password" id="setPass" placeholder="от того же пользователя">' +
+      '<span class="hint">Пароль нигде не сохраняется: после входа остаётся только выданный ' +
+      "токен. Пользователя заводите в <b>Authentication -> Users -> Add user</b>, " +
+      "с галкой Auto Confirm.</span></div>" +
+      '<div style="margin-top:10px"><button class="btn pri" data-act="auth-in">Войти</button></div>';
+  }
+
   function header() {
     var s = DB.settings;
     return '<div class="top"><div class="in">' +
@@ -623,10 +643,11 @@
       '<div id="sbBox" style="margin-top:12px;' + (s.driver === "supabase" ? "" : "display:none") + '">' +
       '<div class="fld"><label>URL проекта</label><input type="text" id="setUrl" value="' + esc(s.sbUrl) +
       '" placeholder="https://xxxx.supabase.co"></div>' +
-      '<div class="fld" style="margin-top:10px"><label>Ключ доступа</label>' +
-      '<input type="password" id="setKey" value="' + esc(s.sbKey) + '" placeholder="anon или service_role">' +
-      '<span class="hint">Ключ хранится только в этом браузере и никуда не отправляется, кроме вашего же проекта Supabase. ' +
-      "Сайт публичный — не вставляйте ключ на чужом компьютере.</span></div>" +
+      '<div class="fld" style="margin-top:10px"><label>Публичный ключ</label>' +
+      '<input type="text" id="setKey" value="' + esc(s.sbKey) + '" placeholder="sb_publishable_… или anon">' +
+      '<span class="hint">Именно <b>публичный</b>. Секретный Supabase в браузере запрещает: ' +
+      "«Secret API keys should never be used in a browser». Доступ к данным даёт не ключ, а вход ниже.</span></div>" +
+      authBox() +
       '<div style="margin-top:12px;display:flex;gap:8px">' +
       '<button class="btn" data-act="sb-ping">Проверить связь</button></div>' +
       '<div class="fld" style="margin-top:12px"><label><input type="checkbox" id="setLive"' +

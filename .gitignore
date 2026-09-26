@@ -3,4 +3,5 @@ config.json
 tokens.json
 .env
 .env.*
-*.zip
+# архив расширения нужен на сайте, поэтому запрет снят
+!setup/reseller-funpay-ext.zip

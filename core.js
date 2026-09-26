@@ -223,43 +223,159 @@
   };
 
   /* ---------------- драйвер: Supabase ---------------- */
+  /* ---------------- вход в Supabase ----------------
+     Раньше панель ходила в базу секретным ключом прямо из браузера. Supabase
+     это запретил, и правильно: «Secret API keys ... should never be used in a
+     browser». Теперь панель ходит публичным ключом и входит обычным
+     пользователем — доступ решает вход, а не ключ.
+
+     Храним не пароль, а выданные токены: пароль после входа не нужен. Токен
+     живёт около часа, поэтому рядом лежит refresh_token, по которому тихо
+     берётся новый. */
+  var SESS_KEY = "reseller-web:session";
+  var AUTH = {
+    token: "",        // access_token, коротко живущий
+    refresh: "",      // по нему берём следующий
+    at: 0,            // когда истекает, мс
+    email: "",
+
+    load: function () {
+      try {
+        var s = JSON.parse(localStorage.getItem(SESS_KEY) || "{}");
+        this.token = s.token || ""; this.refresh = s.refresh || "";
+        this.at = s.at || 0; this.email = s.email || "";
+      } catch (e) { /* пусто так пусто */ }
+      return this;
+    },
+    save: function () {
+      try {
+        localStorage.setItem(SESS_KEY, JSON.stringify({
+          token: this.token, refresh: this.refresh, at: this.at, email: this.email,
+        }));
+      } catch (e) { /* приватный режим — переживём */ }
+    },
+    clear: function () {
+      this.token = ""; this.refresh = ""; this.at = 0; this.email = "";
+      try { localStorage.removeItem(SESS_KEY); } catch (e) {}
+    },
+    ok: function () { return !!this.token; },
+    // Минута запаса: иначе токен успеет протухнуть между проверкой и запросом.
+    fresh: function () { return !!this.token && Date.now() < this.at - 60000; },
+
+    take: function (url, key, body) {
+      var self = this;
+      return fetch(String(url).replace(/\/+$/, "") + "/auth/v1/token?grant_type=" + body.grant,
+        {
+          method: "POST",
+          headers: { apikey: key, "Content-Type": "application/json" },
+          body: JSON.stringify(body.payload),
+        }).then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok) {
+            var m = j.error_description || j.msg || j.message || ("HTTP " + r.status);
+            throw new Error(/Invalid login/i.test(m) ? "не та почта или пароль" : m);
+          }
+          self.token = j.access_token || "";
+          self.refresh = j.refresh_token || "";
+          self.at = Date.now() + (Number(j.expires_in) || 3600) * 1000;
+          if (j.user && j.user.email) self.email = j.user.email;
+          self.save();
+          return self;
+        });
+      });
+    },
+
+    signIn: function (url, key, email, password) {
+      this.email = email;
+      return this.take(url, key, { grant: "password", payload: { email: email, password: password } });
+    },
+
+    renew: function (url, key) {
+      if (!this.refresh) return Promise.reject(new Error("входа нет"));
+      return this.take(url, key, { grant: "refresh_token", payload: { refresh_token: this.refresh } });
+    },
+
+    /** Действующий токен: обновляем заранее, чтобы запрос не упал на 401. */
+    bearer: function (url, key) {
+      if (this.fresh()) return Promise.resolve(this.token);
+      if (this.refresh) {
+        var self = this;
+        return this.renew(url, key).then(function () { return self.token; },
+          function () { self.clear(); return ""; });
+      }
+      return Promise.resolve("");
+    },
+  };
+
   function SupabaseDriver(url, key) {
-    var base = String(url).replace(/\/+$/, "") + "/rest/v1/";
+    var root = String(url).replace(/\/+$/, "");
+    var base = root + "/rest/v1/";
+
+    /* apikey — публичный ключ, Authorization — токен вошедшего. Входа нет —
+       во втором заголовке едет тот же публичный ключ: запрос дойдёт, но RLS
+       ничего не покажет, и это честнее молчаливого пустого списка. */
     function h(extra) {
-      var o = { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json" };
-      for (var k in extra) o[k] = extra[k];
-      return o;
+      return AUTH.bearer(root, key).then(function (tok) {
+        var o = {
+          apikey: key,
+          Authorization: "Bearer " + (tok || key),
+          "Content-Type": "application/json",
+        };
+        for (var k in extra) o[k] = extra[k];
+        return o;
+      });
     }
     function fail(r) {
       return r.text().then(function (t) {
-        throw new Error("Supabase " + r.status + ": " + (t || "").slice(0, 200));
+        var body = (t || "").slice(0, 300);
+        // Три ошибки, которые встречаются чаще всех остальных вместе взятых.
+        if (/secret API key in browser/i.test(body)) {
+          throw new Error("Supabase запрещает секретный ключ в браузере. " +
+            "Нужен публичный ключ и вход по почте с паролем.");
+        }
+        if (r.status === 401) {
+          throw new Error(AUTH.ok()
+            ? "вход просрочен — войдите заново в настройках"
+            : "нужно войти: почта и пароль в настройках");
+        }
+        if (r.status === 404) throw new Error("таблиц нет — выполните SQL из мастера подключения");
+        throw new Error("Supabase " + r.status + ": " + body);
       });
     }
+    // Заголовки собираются асинхронно (может понадобиться обновить токен),
+    // поэтому каждый запрос начинается с них, а не с fetch.
+    function req(path, init) {
+      return h((init && init.headers) || null).then(function (headers) {
+        var o = { headers: headers };
+        for (var k in init) if (k !== "headers") o[k] = init[k];
+        return fetch(base + path, o);
+      });
+    }
+
     return {
       name: "supabase",
       all: function (table) {
-        return fetch(base + table + "?select=*", { headers: h() }).then(function (r) {
+        return req(table + "?select=*", null).then(function (r) {
           return r.ok ? r.json() : fail(r);
         });
       },
       put: function (table, rec) {
-        return fetch(base + table, {
+        return req(table, {
           method: "POST",
-          headers: h({ Prefer: "resolution=merge-duplicates,return=representation" }),
+          headers: { Prefer: "resolution=merge-duplicates,return=representation" },
           body: JSON.stringify(rec),
         }).then(function (r) { return r.ok ? rec : fail(r); });
       },
       del: function (table, id) {
-        return fetch(base + table + "?id=eq." + encodeURIComponent(id), {
-          method: "DELETE", headers: h(),
-        }).then(function (r) { return r.ok ? true : fail(r); });
+        return req(table + "?id=eq." + encodeURIComponent(id), { method: "DELETE" })
+          .then(function (r) { return r.ok ? true : fail(r); });
       },
       clear: function (table) {
-        return fetch(base + table + "?id=not.is.null", { method: "DELETE", headers: h() })
+        return req(table + "?id=not.is.null", { method: "DELETE" })
           .then(function (r) { return r.ok ? true : fail(r); });
       },
       ping: function () {
-        return fetch(base + "products?select=id&limit=1", { headers: h() }).then(function (r) {
+        return req("products?select=id&limit=1", null).then(function (r) {
           return r.ok ? true : fail(r);
         });
       },
@@ -375,6 +491,7 @@
     useSettings: function (s) {
       this.settings = s;
       saveSettings(s);
+      AUTH.load();
       this.driver = s.driver === "supabase" && s.sbUrl && s.sbKey
         ? SupabaseDriver(s.sbUrl, s.sbKey)
         : LocalDriver;
@@ -444,7 +561,7 @@
     uuid: uuid, nowIso: nowIso, esc: esc, money: money, num: num, dt: dt, dOnly: dOnly, ago: ago,
     csvParse: csvParse, csvBuild: csvBuild, download: download,
     VAULT: VAULT, encKey: encKey, decKey: decKey,
-    DB: DB, LIVE: LIVE, loadSettings: loadSettings, saveSettings: saveSettings,
+    DB: DB, LIVE: LIVE, AUTH: AUTH, loadSettings: loadSettings, saveSettings: saveSettings,
     SupabaseDriver: SupabaseDriver,
     renderTemplate: renderTemplate,
   };

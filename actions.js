@@ -628,6 +628,41 @@
   }
 
   /* ---------------- настройки ---------------- */
+  /* Вход в Supabase. Адрес и публичный ключ берём из полей рядом, даже если
+     их ещё не сохранили: иначе пришлось бы сохранять и входить двумя заходами. */
+  function authIn() {
+    var g = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ""; };
+    var url = g("setUrl") || DB.settings.sbUrl;
+    var key = g("setKey") || DB.settings.sbKey;
+    var mail = g("setMail"), pass = (document.getElementById("setPass") || {}).value || "";
+    if (!url || !key) return toast("Сначала адрес проекта и публичный ключ", "err");
+    if (!mail || !pass) return toast("Нужны почта и пароль", "err");
+    if (/^sb_secret_/.test(key)) {
+      return toast("Это секретный ключ. В браузере нужен публичный, sb_publishable_…", "err");
+    }
+    toast("Вхожу…");
+    R.AUTH.signIn(url, key, mail, pass).then(function () {
+      // Настройки могли быть ещё не сохранены — закрепляем то, чем вошли.
+      var st = Object.assign({}, DB.settings, { driver: "supabase", sbUrl: url, sbKey: key });
+      DB.useSettings(st);
+      return DB.loadAll();
+    }).then(function () {
+      render();
+      if (window.__startLive) window.__startLive();
+      toast("Вход выполнен", "ok");
+    }, function (e) {
+      render();
+      toast("Войти не вышло: " + e.message, "err");
+    });
+  }
+
+  function authOut() {
+    R.AUTH.clear();
+    DB.cache = {};
+    render();
+    toast("Вы вышли", "ok");
+  }
+
   function settingsSave() {
     var s = Object.assign({}, DB.settings);
     var g = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ""; };
@@ -770,6 +805,8 @@
         DB.remove("accounts", id).then(function () { done("Удалено"); }, fail);
       });
 
+      case "auth-in": return authIn();
+      case "auth-out": return authOut();
       case "settings-save": return settingsSave();
       case "sb-ping": return sbPing();
       case "dump-export": return dumpExport();
