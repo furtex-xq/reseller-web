@@ -711,6 +711,9 @@
 
   window.__actions = function (act, id, el) {
     // Мастер подключения живёт в setup.js и свои действия обрабатывает сам.
+    if (act.indexOf("ext-") === 0) {
+      return window.__extAct ? window.__extAct(act, el) : toast("ext.js не загрузился", "err");
+    }
     if (act.indexOf("setup-") === 0) {
       return window.__setupAct ? window.__setupAct(act, el) : toast("setup.js не загрузился", "err");
     }

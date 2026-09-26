@@ -289,3 +289,8 @@ td.acts .btn{margin-left:5px}
 .steps li{margin-bottom:7px}
 .steps li::marker{color:var(--acc2);font-weight:700}
 .steps code,p code,li code{background:var(--card2);padding:1px 5px;border-radius:4px;font-size:12px}
+
+/* Иконка в заголовке карточки. Без явного размера svg растягивается на всю
+   ширину: у него нет собственных width/height, только viewBox. */
+.card>h2 svg,h2 svg{width:17px;height:17px;flex:0 0 auto;margin-right:7px;
+  stroke:currentColor;fill:none;stroke-width:2}
