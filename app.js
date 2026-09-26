@@ -781,8 +781,9 @@
 
   /* ---------------- старт ---------------- */
   DB.useSettings(R.loadSettings());
-  // Ссылка #/setup ведёт прямо в мастер: на неё ссылаются SQL-шаблон и документация.
-  if (/^#\/?setup$/i.test(location.hash)) TAB = "setup";
+  // Ссылка #/setup ведёт прямо в мастер. С параметрами (#/setup?u=…&k=…) она
+  // заодно заполняет адрес и публичный ключ — чтобы не вводить их руками.
+  if (/^#\/?setup(\?|$)/i.test(location.hash)) TAB = "setup";
   render();
   DB.loadAll().then(function () {
     loaded = true; render();
@@ -827,7 +828,7 @@
   // Переход по #/setup из уже открытой панели меняет только хэш и перезагрузки
   // не вызывает — без этого ссылка из документации молча не срабатывала бы.
   window.addEventListener("hashchange", function () {
-    if (/^#\/?setup$/i.test(location.hash) && TAB !== "setup") { TAB = "setup"; render(); }
+    if (/^#\/?setup(\?|$)/i.test(location.hash) && TAB !== "setup") { TAB = "setup"; render(); }
   });
 
   // Вкладку свернули — опрос простаивает; вернулись — сверяемся сразу, не

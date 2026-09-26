@@ -41,14 +41,50 @@
     catch (e) { /* приватный режим — переживём */ }
   }
 
+  /**
+   * Готовая ссылка вида #/setup?u=…&k=… заполняет адрес и публичный ключ.
+   *
+   * В адресе им ничего не грозит: публичный ключ на то и публичный, он и так
+   * лежит в открытом коде панели. Секретных ключей и паролей тут нет и быть
+   * не может — после разбора параметры из адресной строки убираются, чтобы
+   * ссылка не тиражировалась дальше.
+   */
+  function fromLink() {
+    var q = String(location.hash || "").split("?")[1];
+    if (!q) return false;
+    var got = { u: "", k: "" };
+    q.split("&").forEach(function (p) {
+      var i = p.indexOf("=");
+      if (i < 0) return;
+      var name = p.slice(0, i), val = decodeURIComponent(p.slice(i + 1).replace(/\+/g, " "));
+      if (name === "u") got.u = val;
+      if (name === "k") got.k = val;
+    });
+    var u = asUrl(got.u), k = got.k.trim();
+    if (!u && !k) return false;
+    if (u) D.url = u;
+    // Секретный ключ по ссылке не принимаем даже случайно.
+    if (k && !/^sb_secret_/.test(k)) D.anon = k;
+    saveDraft();
+    try { history.replaceState(null, "", location.pathname + "#/setup"); } catch (e) {}
+    return true;
+  }
+
+  var загружен = false;
+
   function boot() {
-    if (D.url || D.anon) return;
-    try {
-      var d = JSON.parse(localStorage.getItem(DRAFT) || "{}");
-      D.url = d.url || ""; D.anon = d.anon || "";
-    } catch (e) { /* пусто так пусто */ }
-    if (!D.url) D.url = DB.settings.sbUrl || "";
-    if (!D.anon) D.anon = DB.settings.sbKey || "";
+    if (!загружен) {
+      загружен = true;
+      try {
+        var d = JSON.parse(localStorage.getItem(DRAFT) || "{}");
+        D.url = d.url || ""; D.anon = d.anon || "";
+      } catch (e) { /* пусто так пусто */ }
+      if (!D.url) D.url = DB.settings.sbUrl || "";
+      if (!D.anon) D.anon = DB.settings.sbKey || "";
+    }
+    // Параметры ссылки сильнее черновика: человек открыл её как раз затем,
+    // чтобы не вводить руками. Срабатывает один раз — потом хэш очищен.
+    fromLink();
   }
 
   /* ---------------- адрес и ключ ---------------- */
@@ -266,11 +302,17 @@
           '<div class="fld" style="margin-top:14px"><label>Почта</label>' +
           '<input type="email" id="setupMail" value="' + esc(A.email) + '"></div>' +
           '<div class="fld" style="margin-top:10px"><label>Пароль</label>' +
-          '<input type="password" id="setupPass">' +
+          '<input type="password" id="setupPass" placeholder="придумайте, если заводите нового">' +
           '<span class="hint">Пароль не сохраняется: после входа остаётся только выданный ' +
           "токен, и просроченный обновляется сам.</span></div>" +
-          '<div style="margin-top:10px"><button class="btn pri" data-act="setup-signin">' +
-          ic("lock") + " Войти</button></div>");
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' +
+          '<button class="btn pri" data-act="setup-signup">' + ic("plus") +
+          " Завести и войти</button>" +
+          '<button class="btn" data-act="setup-signin">' + ic("lock") + " Уже есть, войти</button>" +
+          "</div>" +
+          '<div class="note" style="margin-top:12px">«Завести и войти» создаёт пользователя ' +
+          "прямо отсюда — в дашборд идти не нужно. Если Supabase потребует подтвердить почту, " +
+          "панель скажет об этом и подскажет, что выключить.</div>");
 
     /* 5 — расширение */
     h += stepBox(5, "Поставить расширение Chrome", false,
@@ -403,6 +445,75 @@
     });
   }
 
+  /**
+   * Завести пользователя прямо из панели.
+   *
+   * Обычный публичный signup — тот же, которым пользуются сайты. Ходить в
+   * дашборд не нужно. Единственная засада: у новых проектов Supabase включено
+   * подтверждение почты, и тогда сессии в ответе не будет. Это отличимо, и
+   * панель говорит, что именно выключить, вместо молчаливой неудачи.
+   */
+  function signUp() {
+    var g = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ""; };
+    var mail = g("setupMail");
+    var pass = (document.getElementById("setupPass") || {}).value || "";
+    if (!D.url || !D.anon) return toast("Сначала адрес и публичный ключ", "err");
+    if (!mail || !pass) return toast("Нужны почта и пароль", "err");
+    if (pass.length < 6) return toast("Supabase не примет пароль короче шести символов", "err");
+
+    toast("Завожу пользователя…");
+    fetch(String(D.url).replace(/\/+$/, "") + "/auth/v1/signup", {
+      method: "POST",
+      headers: { apikey: D.anon, "Content-Type": "application/json" },
+      body: JSON.stringify({ email: mail, password: pass }),
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) {
+          var m = String(j.msg || j.error_description || j.message || ("HTTP " + r.status));
+          if (/already registered|already exists/i.test(m)) {
+            // Пользователь есть — значит человеку нужен вход, а не заведение.
+            toast("Такой пользователь уже есть — вхожу", "ok");
+            return signIn();
+          }
+          throw new Error(m);
+        }
+        // Сессия выдана сразу — подтверждение почты выключено, всё готово.
+        if (j.access_token) return принятьСессию(j, mail);
+        if (j.session && j.session.access_token) return принятьСессию(j.session, mail);
+
+        D.probe = {
+          kind: "err",
+          msg: "пользователь создан, но Supabase ждёт подтверждения почты",
+          hint: "Выключите подтверждение: <b>Authentication → Sign In / Providers → Email</b> → " +
+            'снять <b>Confirm email</b> → Save. Потом нажмите «Уже есть, войти». ' +
+            '<a href="' + dash("/auth/providers") + '" target="_blank" rel="noopener">Открыть</a>',
+        };
+        window.__render();
+        toast("Нужно выключить подтверждение почты — смотрите шаг 6", "warn");
+      });
+    }).catch(function (e) {
+      toast("Не вышло: " + e.message, "err");
+    });
+  }
+
+  function принятьСессию(j, mail) {
+    var A = R.AUTH;
+    A.token = j.access_token || "";
+    A.refresh = j.refresh_token || "";
+    A.at = Date.now() + (Number(j.expires_in) || 3600) * 1000;
+    A.email = mail;
+    A.save();
+    var s = Object.assign({}, DB.settings, { driver: "supabase", sbUrl: D.url, sbKey: D.anon });
+    DB.useSettings(s);
+    return DB.loadAll().then(function () {
+      D.state = null;
+      window.__render();
+      if (window.__startLive) window.__startLive();
+      toast("Пользователь заведён, вход выполнен", "ok");
+      checkAll();
+    });
+  }
+
   function go() {
     if (!R.AUTH.ok()) return toast("Сначала войдите, шаг 4", "err");
     D.probing = true; D.probe = null; window.__render();
@@ -434,6 +545,7 @@
     }
     if (a === "setup-check") { D.state = null; window.__render(); return checkAll(); }
     if (a === "setup-signin") return signIn();
+    if (a === "setup-signup") return signUp();
     if (a === "setup-go") return go();
     if (a === "setup-copy") {
       var what = el ? el.getAttribute("data-what") : "";
