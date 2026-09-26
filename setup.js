@@ -52,19 +52,23 @@
   function fromLink() {
     var q = String(location.hash || "").split("?")[1];
     if (!q) return false;
-    var got = { u: "", k: "" };
+    var got = { u: "", k: "", e: "" };
     q.split("&").forEach(function (p) {
       var i = p.indexOf("=");
       if (i < 0) return;
       var name = p.slice(0, i), val = decodeURIComponent(p.slice(i + 1).replace(/\+/g, " "));
       if (name === "u") got.u = val;
       if (name === "k") got.k = val;
+      // Почта — просто имя для входа, её подставить можно. Пароль по ссылке
+      // не принимаем ни при каких условиях: ему место только в поле.
+      if (name === "e") got.e = val;
     });
     var u = asUrl(got.u), k = got.k.trim();
-    if (!u && !k) return false;
+    if (!u && !k && !got.e) return false;
     if (u) D.url = u;
     // Секретный ключ по ссылке не принимаем даже случайно.
     if (k && !/^sb_secret_/.test(k)) D.anon = k;
+    if (got.e && !R.AUTH.ok()) R.AUTH.email = got.e.trim();
     saveDraft();
     try { history.replaceState(null, "", location.pathname + "#/setup"); } catch (e) {}
     return true;
