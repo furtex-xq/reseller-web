@@ -28,7 +28,7 @@
 
   var D = {
     url: "", anon: "", paste: "",
-    probe: null, probing: false, err: "",
+    probe: null, probing: false, err: "", authNote: "",
     state: null, checking: false,
   };
 
@@ -335,6 +335,7 @@
           "<code>я@я.рф</code>: писем никто не шлёт, это просто имя для входа.</li>" +
           "<li>Впишите их в два поля ниже.</li>" +
           "<li>Нажмите <b>«Завести и войти»</b>.</li></ol>" +
+          (D.authNote ? '<div class="note warn">' + D.authNote + "</div>" : "") +
           '<div class="fld" style="margin-top:14px"><label>Почта</label>' +
           '<input type="email" id="setupMail" value="' + esc(A.email) + '"></div>' +
           '<div class="fld" style="margin-top:10px"><label>Пароль</label>' +
@@ -479,6 +480,13 @@
       toast("Вход выполнен", "ok");
       checkAll();
     }, function (e) {
+      D.authNote = "<b>Войти не вышло:</b> " + esc(e.message) +
+        (/Email not confirmed|not confirmed/i.test(e.message)
+          ? "<br><br>Почта не подтверждена. Выключите проверку: " +
+            '<a href="' + dash("/auth/providers") + '" target="_blank" rel="noopener">' +
+            "Authentication → Sign In / Providers</a> → Email → снять <b>Confirm email</b> → Save. " +
+            "Потом удалите пользователя в <b>Users</b> и нажмите «Завести и войти»."
+          : "");
       window.__render();
       toast("Войти не вышло: " + e.message, "err");
     });
@@ -520,15 +528,24 @@
         if (j.access_token) return принятьСессию(j, mail);
         if (j.session && j.session.access_token) return принятьСессию(j.session, mail);
 
-        D.probe = {
-          kind: "err",
-          msg: "пользователь создан, но Supabase ждёт подтверждения почты",
-          hint: "Выключите подтверждение: <b>Authentication → Sign In / Providers → Email</b> → " +
-            'снять <b>Confirm email</b> → Save. Потом нажмите «Уже есть, войти». ' +
-            '<a href="' + dash("/auth/providers") + '" target="_blank" rel="noopener">Открыть</a>',
-        };
+        /* Самая частая заминка: у новых проектов Supabase требует подтвердить
+           почту, и сессию не выдаёт. Пишем об этом прямо в шаге 4 — раньше
+           сообщение уезжало в шаг 6, далеко от кнопки, которую нажали. */
+        D.authNote =
+          "<b>Пользователь создан, но Supabase ждёт подтверждения почты.</b><br><br>" +
+          "Быстрее всего выключить проверку:" +
+          '<ol class="steps"><li><a href="' + dash("/auth/providers") + '" target="_blank" ' +
+          'rel="noopener">Authentication → Sign In / Providers</a> → раскрыть <b>Email</b>.</li>' +
+          "<li>Снять галку <b>Confirm email</b> → <b>Save</b>.</li>" +
+          '<li><a href="' + dash("/auth/users") + '" target="_blank" rel="noopener">' +
+          "Authentication → Users</a> → удалить только что созданного пользователя: " +
+          "он остался неподтверждённым, и войти под ним всё равно не выйдет.</li>" +
+          "<li>Вернуться сюда и нажать <b>«Завести и войти»</b> ещё раз — теперь вход " +
+          "произойдёт сразу.</li></ol>" +
+          "Или подтвердите письмо, которое Supabase прислал на эту почту, и нажмите " +
+          "«Уже есть, войти».";
         window.__render();
-        toast("Нужно выключить подтверждение почты — смотрите шаг 6", "warn");
+        toast("Нужно выключить подтверждение почты — смотрите шаг 4", "warn");
       });
     }).catch(function (e) {
       toast("Не вышло: " + e.message, "err");
