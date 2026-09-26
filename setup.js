@@ -158,16 +158,26 @@
     var base = String(D.url).replace(/\/+$/, "");
     var st = { tables: false, auth: false, rows: 0 };
 
+    var ключи = null;
     return R.AUTH.bearer(base, D.anon).then(function (tok) {
       st.auth = !!tok;
-      return fetch(base + "/rest/v1/orders?select=id&limit=1", {
-        headers: { apikey: D.anon, Authorization: "Bearer " + (tok || D.anon) },
-      });
+      ключи = { apikey: D.anon, Authorization: "Bearer " + (tok || D.anon) };
+      return fetch(base + "/rest/v1/orders?select=id&limit=1", { headers: ключи });
     }).then(function (r) {
-      // 404 — таблицы нет. 200 с пустотой при отсутствии входа — это RLS,
-      // а не пустая база, поэтому «есть таблицы» и «есть доступ» считаем порознь.
+      // 404 — таблицы нет. Пустой список ничего не доказывает: так выглядит и
+      // пустая база, и закрытая правилами, поэтому это считаем отдельно.
       st.tables = r.status !== 404;
       if (r.ok) return r.json().then(function (rows) { st.rows = rows.length; });
+    }).then(function () {
+      /* Права проверяем записью, а не чтением: без правил чтение молча вернёт
+         пустой список, и «нет доступа» не отличить от «нечего показывать».
+         Пишем строку в журнал событий — таблица ровно для таких отметок. */
+      if (!st.auth || !st.tables) return;
+      return fetch(base + "/rest/v1/events", {
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json", Prefer: "return=minimal" }, ключи),
+        body: JSON.stringify([{ type: "setup_check", level: "info", payload: { откуда: "мастер" } }]),
+      }).then(function (r) { st.rights = r.ok; }, function () { st.rights = false; });
     }).catch(function () { /* сети нет — оставим как есть */ })
       .then(function () {
         D.checking = false;
@@ -213,6 +223,8 @@
     var left = [];
     if (!st.tables) left.push("шаг 3 — таблицы");
     if (!st.auth) left.push("шаг 4 — вход");
+    // Права проверяются записью и только после входа — иначе проверять нечем.
+    else if (!st.rights) left.push("шаг 3 — права доступа");
     if (!left.length) {
       return '<div class="note ok">В проекте всё на месте: таблицы созданы, вход работает. ' +
         "Осталось поставить расширение и открыть FunPay.</div>";
@@ -278,9 +290,16 @@
     }
 
     /* 3 — SQL */
-    h += stepBox(3, "Создать таблицы и права", !!st.tables,
+    h += stepBox(3, "Создать таблицы и права", !!(st.tables && st.rights),
       '<p class="muted">Один запрос: таблицы под товары, склад, заказы и чаты, плюс правила ' +
       "доступа — они открывают данные тому, кто вошёл, и закрывают всем остальным.</p>" +
+      (st.tables && st.auth && st.rights === false
+        ? '<div class="note warn">Таблицы есть, а правил доступа нет: пробная запись в базу ' +
+          "не прошла. Выполните этот SQL — он добавит недостающее, а таблицы не тронет.</div>"
+        : st.tables && !st.auth
+        ? '<div class="note">Таблицы есть. Права проверяются только после входа — если вы ' +
+          "не выполняли этот SQL после обновления панели, выполните.</div>"
+        : "") +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
       copyBtn("sql", "Скопировать SQL") +
       '<a class="btn pri" href="' + dash("/sql/new") + '" target="_blank" rel="noopener">' +
