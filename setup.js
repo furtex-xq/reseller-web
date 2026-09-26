@@ -141,11 +141,24 @@
         function (e) { LOADING = false; D.err = e.message; window.__render(); });
   }
 
-  /** Весь SQL одним куском: таблицы и правила доступа. */
+  /**
+   * SQL для шага 3.
+   *
+   * Когда таблицы уже созданы, схему подкладывать нельзя: `create table` без
+   * «if not exists» упадёт на первой же таблице и оборвёт весь скрипт, так и
+   * не дойдя до прав. Поэтому при готовых таблицах отдаём только права.
+   */
   function sql() {
     if (!FILES.schema || !FILES.policies) return "";
-    return "-- Собрано мастером панели Reseller Web. Выполнять целиком, один раз.\n" +
-      "-- Проект: " + String(D.url).replace(/\/+$/, "") + "\n\n" +
+    var шапка = "-- Собрано мастером панели Reseller Web.\n" +
+      "-- Проект: " + String(D.url).replace(/\/+$/, "") + "\n";
+    if (D.state && D.state.tables) {
+      return шапка +
+        "-- Таблицы у вас уже есть, поэтому здесь только права доступа.\n" +
+        "-- Схему повторно выполнять нельзя: create table упадёт на первой же.\n\n" +
+        FILES.policies;
+    }
+    return шапка + "-- Выполнять целиком, один раз.\n\n" +
       FILES.schema + "\n\n" + FILES.policies;
   }
 
@@ -301,7 +314,7 @@
           "не выполняли этот SQL после обновления панели, выполните.</div>"
         : "") +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
-      copyBtn("sql", "Скопировать SQL") +
+      copyBtn("sql", st.tables ? "Скопировать права доступа" : "Скопировать SQL") +
       '<a class="btn pri" href="' + dash("/sql/new") + '" target="_blank" rel="noopener">' +
       ic("link") + " Открыть SQL Editor</a></div>" +
       '<details style="margin-top:12px"><summary class="muted">Посмотреть, что там</summary>' +
