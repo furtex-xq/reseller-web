@@ -326,11 +326,11 @@
         ? '<div class="note ok">Вход выполнен: <b>' + esc(A.email || "—") + "</b>" +
           '<div style="margin-top:10px"><button class="btn sm" data-act="auth-out">Выйти</button></div></div>'
         : '<p class="muted">Панель и расширение ходят в базу публичным ключом, а доступ даёт ' +
-          "вход. Заведите себе пользователя один раз: <b>Authentication → Users → Add user → " +
-          "Create new user</b>, обязательно с галкой <b>Auto Confirm User</b>. Почта может быть " +
-          "любой, писем никто не шлёт.</p>" +
-          '<div style="margin-top:12px"><a class="btn" href="' + dash("/auth/users") +
-          '" target="_blank" rel="noopener">' + ic("link") + " Открыть Authentication</a></div>" +
+          "вход. Логина у вас ещё нет — заведите прямо здесь, это одно нажатие.</p>" +
+          '<ol class="steps"><li>Придумайте почту и пароль. Почта <b>любая</b>, хоть ' +
+          "<code>я@я.рф</code>: писем никто не шлёт, это просто имя для входа.</li>" +
+          "<li>Впишите их в два поля ниже.</li>" +
+          "<li>Нажмите <b>«Завести и войти»</b>.</li></ol>" +
           '<div class="fld" style="margin-top:14px"><label>Почта</label>' +
           '<input type="email" id="setupMail" value="' + esc(A.email) + '"></div>' +
           '<div class="fld" style="margin-top:10px"><label>Пароль</label>' +
@@ -342,9 +342,12 @@
           " Завести и войти</button>" +
           '<button class="btn" data-act="setup-signin">' + ic("lock") + " Уже есть, войти</button>" +
           "</div>" +
-          '<div class="note" style="margin-top:12px">«Завести и войти» создаёт пользователя ' +
-          "прямо отсюда — в дашборд идти не нужно. Если Supabase потребует подтвердить почту, " +
-          "панель скажет об этом и подскажет, что выключить.</div>");
+          '<div class="note" style="margin-top:12px">Кнопка <b>«Уже есть, войти»</b> — если ' +
+          "логин вы завели раньше. Если Supabase потребует подтвердить почту, панель скажет " +
+          "об этом и даст ссылку, что выключить.<br><br>" +
+          'Через дашборд тоже можно: <a href="' + dash("/auth/users") + '" target="_blank" ' +
+          'rel="noopener">Authentication → Users</a> → Add user, с галкой Auto Confirm User. ' +
+          "Но это дольше и ничем не лучше.</div>");
 
     /* 5 — расширение */
     h += stepBox(5, "Поставить расширение Chrome", false,
