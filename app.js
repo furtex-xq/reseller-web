@@ -746,6 +746,47 @@
     }
     el("app").innerHTML = header() + "<main>" + body + "</main>";
     document.documentElement.setAttribute("data-theme", DB.settings.theme === "light" ? "light" : "dark");
+    появление();
+  }
+
+  /* ---------------- появление блоков ----------------
+     То же, что на витрине гайдов: карточки выходят снизу каскадом, а не
+     возникают разом. Живое обновление перерисовывает страницу само, поэтому
+     наблюдатель пересоздаётся при каждой отрисовке — иначе он следил бы за
+     узлами, которых уже нет.
+
+     Каскад считается по тому, сколько блоков попало в поле зрения разом, и
+     обрезан девятью: дальше задержка начинает раздражать, а не помогать. */
+  var МЕНЬШЕ_ДВИЖЕНИЯ = false;
+  try {
+    МЕНЬШЕ_ДВИЖЕНИЯ = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch (e) {}
+
+  var наблюдатель = null;
+  var ПОЯВЛЯЮТСЯ = ".card,.cards4>.card,.tw,.note,.head,.steps";
+
+  function появление() {
+    if (МЕНЬШЕ_ДВИЖЕНИЯ || !window.IntersectionObserver) return;
+    if (наблюдатель) наблюдатель.disconnect();
+    наблюдатель = new IntersectionObserver(function (записи) {
+      var k = 0;
+      for (var i = 0; i < записи.length; i++) {
+        if (!записи[i].isIntersecting) continue;
+        записи[i].target.style.setProperty("--d", Math.min(k, 9) * 45 + "ms");
+        записи[i].target.classList.add("in");
+        наблюдатель.unobserve(записи[i].target);
+        k++;
+      }
+    }, { rootMargin: "0px 0px -30px 0px", threshold: 0.01 });
+
+    var узлы = document.querySelectorAll(ПОЯВЛЯЮТСЯ);
+    for (var i = 0; i < узлы.length; i++) {
+      // Вложенные карточки не анимируем отдельно: родитель уже выехал,
+      // и второй проход выглядел бы дёрганьем.
+      if (узлы[i].closest(".rv")) continue;
+      узлы[i].classList.add("rv");
+      наблюдатель.observe(узлы[i]);
+    }
   }
   window.__render = render;
   window.__setTab = function (t) { TAB = t; render(); };

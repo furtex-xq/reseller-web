@@ -2,32 +2,41 @@
    Рабочий инструмент: спокойный тёмный фон, один акцент, моноширинные цифры,
    чтобы суммы не дёргались при обновлении. */
 
+/* Палитра та же, что на витрине гайдов: тёмная база и золото. Панель и
+   витрина — один продукт, и выглядеть должны одинаково.
+
+   Цвета состояний остались отдельными и не стали золотыми. На витрине
+   --ok можно было свести к акценту, здесь нельзя: «выдан», «возврат» и
+   «спор» обязаны различаться с одного взгляда. Их только подогнали к тёплой
+   гамме, чтобы не выбивались. */
 :root{
-  --bg:#0d1117;
-  --bg2:#010409;
-  --card:#161b22;
-  --card2:#1c2430;
-  --line:#26303d;
-  --line2:#323d4d;
-  --tx:#e6edf3;
-  --tx2:#9fb0c3;
-  --tx3:#6e7f93;
-  --acc:#2dd4bf;
-  --acc2:#5eead4;
-  --accDim:rgba(45,212,191,.14);
-  --ok:#3fb950;
-  --warn:#d29922;
-  --err:#f85149;
-  --info:#58a6ff;
-  --r:12px;
-  --shadow:0 8px 28px rgba(0,0,0,.45);
+  --bg:#070707;
+  --bg2:#0d0c0a;
+  --card:#121110;
+  --card2:#1a1815;
+  --line:#272320;
+  --line2:#3a3229;
+  --tx:#f2ece1;
+  --tx2:#a79c8a;
+  --tx3:#7a7163;
+  --acc:#d4af37;
+  --acc2:#f3d88a;
+  --accDim:rgba(212,175,55,.14);
+  --gold:linear-gradient(135deg,#f3d88a,#d4af37 45%,#a8842a);
+  --ok:#8fb552;
+  --warn:#e0a82e;
+  --err:#c9705f;
+  --info:#c2a25a;
+  --r:16px;
+  --shadow:0 10px 30px rgba(0,0,0,.55);
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
 }
 :root[data-theme="light"]{
-  --bg:#f6f8fa; --bg2:#eaeef2; --card:#fff; --card2:#f6f8fa;
-  --line:#d8dee4; --line2:#c2cad3; --tx:#1f2328; --tx2:#57606a; --tx3:#8c959f;
-  --accDim:rgba(13,148,136,.12); --acc:#0d9488; --acc2:#0f766e;
-  --shadow:0 6px 22px rgba(31,35,40,.12);
+  --bg:#f7f4ed; --bg2:#efe9dd; --card:#fffdf8; --card2:#f4efe4;
+  --line:#e0d7c6; --line2:#cdc0a9; --tx:#231f1a; --tx2:#5d5545; --tx3:#8b8271;
+  --accDim:rgba(150,110,20,.12); --acc:#96701a; --acc2:#7a5a12;
+  --ok:#5d7c2b; --warn:#a9761a; --err:#a04a3a; --info:#8a6d1f;
+  --shadow:0 6px 22px rgba(60,48,20,.14);
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
@@ -54,7 +63,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .logo{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.2px;flex:none}
 .logo .mark{
   width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:none;
-  background:linear-gradient(135deg,var(--acc),#0ea5a3);color:#04131a;
+  background:var(--gold);color:#1a1405;
 }
 .logo .mark svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2.1}
 .grow{flex:1}
@@ -304,3 +313,63 @@ td.acts .btn{margin-left:5px}
    и не пляшут при разной длине названий. */
 .chips2{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
 .chips2 .btn{justify-content:flex-start}
+
+/* ══════════════════ движение ══════════════════
+   Перенесено с витрины гайдов, чтобы панель и витрина ощущались одним
+   продуктом. Правило простое: движение подсказывает, что появилось и что
+   откликается на руку, и нигде не задерживает работу — самая долгая
+   анимация вдвое короче секунды.
+
+   Всё выключается системной настройкой «уменьшить движение»: блок в самом
+   низу возвращает интерфейс к статике одной строкой. */
+
+@keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+@keyframes barIn{to{transform:scaleY(1)}}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* Появление блоков при прокрутке. Задержка --d задаётся из скрипта, чтобы
+   карточки выходили каскадом, а не все разом. */
+.rv{opacity:0}
+.rv.in{animation:riseIn .5s cubic-bezier(.22,.7,.25,1) both;animation-delay:var(--d,0ms)}
+
+/* Золотая полоска у заголовков карточек — как у разделов в гайдах. */
+.card>h2{position:relative;padding-left:13px}
+.card>h2::before{content:"";position:absolute;left:0;top:.28em;bottom:.24em;width:3px;
+  border-radius:2px;background:var(--gold);transform:scaleY(0);transform-origin:top;
+  animation:barIn .45s cubic-bezier(.22,.7,.25,1) both}
+
+h1{background-image:linear-gradient(110deg,#a8842a,#f7e3a8 25%,#d4af37 50%,#f7e3a8 75%,#a8842a);
+  background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:shimmer 9s linear infinite}
+
+.logo .mark{transition:transform .35s cubic-bezier(.22,.7,.25,1)}
+.logo:hover .mark{transform:rotate(-7deg) scale(1.08)}
+
+.card{transition:border-color .2s,transform .2s}
+.card:hover{border-color:var(--line2)}
+
+/* Строки таблиц отзываются сдвигом — то же, что в списке гайдов. */
+.tw tbody tr{transition:background .16s,transform .16s}
+.tw tbody tr:hover{background:var(--card2);transform:translateX(3px)}
+
+.btn{transition:border-color .16s,background .16s,transform .12s,color .16s}
+.btn:hover{border-color:var(--acc)}
+.btn:active{transform:scale(.97)}
+.tab{transition:color .16s,background .16s}
+.pill{transition:border-color .16s}
+
+/* Плитки денег во вкладке «История». */
+.cards4 .card{transition:transform .2s,border-color .2s}
+.cards4 .card:hover{transform:translateY(-3px);border-color:rgba(212,175,55,.35)}
+
+.note{animation:fadeIn .25s both}
+.toasts>*{animation:riseIn .3s cubic-bezier(.22,.7,.25,1) both}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important}
+  .rv{opacity:1!important}
+  h1{animation:none;color:var(--tx);-webkit-text-fill-color:currentColor}
+}
