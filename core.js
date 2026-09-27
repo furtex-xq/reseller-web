@@ -339,7 +339,13 @@
             ? "вход просрочен — войдите заново в настройках"
             : "нужно войти: почта и пароль в настройках");
         }
-        if (r.status === 404) throw new Error("таблиц нет — выполните SQL из мастера подключения");
+        if (r.status === 404) {
+          // Помечаем отдельно: отсутствие одной таблицы не должно валить
+          // загрузку всех остальных. Разбирается это в loadAll.
+          var нет = new Error("таблицы нет — выполните SQL из мастера подключения");
+          нет.нетТаблицы = true;
+          throw нет;
+        }
         throw new Error("Supabase " + r.status + ": " + body);
       });
     }
@@ -498,11 +504,30 @@
         : LocalDriver;
       this.cache = {};
     },
+    /** Какие таблицы база не знает. Пусто — значит схема полная. */
+    missing: [],
+
+    /**
+     * Загрузка всех таблиц.
+     *
+     * Отсутствие одной таблицы не валит остальные: схема прирастает
+     * миграциями, и человек может открыть панель раньше, чем выполнит
+     * очередную. Раньше так и выходило — добавил `reviews` в список, и до
+     * миграции панель не загружалась вовсе. Теперь недостающие просто
+     * перечисляются, а данные показываются.
+     *
+     * Любая другая ошибка — настоящая, и её по-прежнему видно.
+     */
     loadAll: function () {
       var self = this;
+      self.missing = [];
       return Promise.all(TABLES.map(function (t) {
         return self.driver.all(t).then(function (rows) { self.cache[t] = rows || []; },
-          function (e) { self.cache[t] = []; throw e; });
+          function (e) {
+            self.cache[t] = [];
+            if (e && e.нетТаблицы) { self.missing.push(t); return; }
+            throw e;
+          });
       })).then(function () { return self.cache; });
     },
     get: function (table) { return this.cache[table] || []; },

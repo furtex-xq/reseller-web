@@ -23,7 +23,7 @@
 
   // Заготовки подтягиваются с сервера при первом открытии вкладки: держать
   // схему базы внутри панели незачем.
-  var FILES = { schema: null, policies: null };
+  var FILES = { schema: null, policies: null, reviews: null };
   var LOADING = false;
 
   var D = {
@@ -140,7 +140,8 @@
         .then(function (r) { if (!r.ok) throw new Error(f + ": HTTP " + r.status); return r.text(); })
         .then(function (t) { FILES[k] = t; });
     };
-    Promise.all([one("schema", "schema.sql"), one("policies", "policies.sql")])
+    Promise.all([one("schema", "schema.sql"), one("policies", "policies.sql"),
+      one("reviews", "reviews.sql")])
       .then(function () { LOADING = false; window.__render(); },
         function (e) { LOADING = false; D.err = e.message; window.__render(); });
   }
@@ -156,14 +157,20 @@
     if (!FILES.schema || !FILES.policies) return "";
     var шапка = "-- Собрано мастером панели Reseller Web.\n" +
       "-- Проект: " + String(D.url).replace(/\/+$/, "") + "\n";
+
+    // Таблица отзывов появилась позже остальных и создаётся с «if not
+    // exists», поэтому её можно подкладывать в обоих случаях.
+    var отзывы = FILES.reviews ? "\n\n" + FILES.reviews : "";
+
     if (D.state && D.state.tables) {
       return шапка +
-        "-- Таблицы у вас уже есть, поэтому здесь только права доступа.\n" +
-        "-- Схему повторно выполнять нельзя: create table упадёт на первой же.\n\n" +
-        FILES.policies;
+        "-- Таблицы у вас уже есть, поэтому здесь только права доступа\n" +
+        "-- и таблица отзывов, которой в первой схеме не было.\n" +
+        "-- Саму схему повторно выполнять нельзя: create table упадёт на первой же.\n\n" +
+        FILES.policies + отзывы;
     }
     return шапка + "-- Выполнять целиком, один раз.\n\n" +
-      FILES.schema + "\n\n" + FILES.policies;
+      FILES.schema + "\n\n" + FILES.policies + отзывы;
   }
 
   /* ---------------- что уже готово ----------------
