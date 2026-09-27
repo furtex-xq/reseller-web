@@ -170,14 +170,28 @@
   }
 
   /* ---------------- драйвер: IndexedDB ---------------- */
+  /**
+   * Локальная база в браузере.
+   *
+   * Версия равна числу таблиц. Так у неё нет шанса отстать: добавили таблицу
+   * в TABLES — версия выросла, браузер позвал onupgradeneeded, недостающее
+   * хранилище создалось. Раньше стояла единица, и добавленная `reviews`
+   * роняла всю панель на «object store was not found».
+   *
+   * Уже открытая в другой вкладке база блокирует повышение версии, поэтому
+   * onblocked говорит об этом словами, а не молчит.
+   */
   function idbOpen() {
     return new Promise(function (res, rej) {
-      var r = indexedDB.open("reseller-web", 1);
+      var r = indexedDB.open("reseller-web", TABLES.length);
       r.onupgradeneeded = function () {
         var db = r.result;
         TABLES.forEach(function (t) {
           if (!db.objectStoreNames.contains(t)) db.createObjectStore(t, { keyPath: "id" });
         });
+      };
+      r.onblocked = function () {
+        rej(new Error("база занята другой вкладкой панели — закройте её и обновите страницу"));
       };
       r.onsuccess = function () { res(r.result); };
       r.onerror = function () { rej(r.error); };
