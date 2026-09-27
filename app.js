@@ -69,6 +69,7 @@
     { id: "jobs", t: "Задачи", i: "list", c: function () { return DB.get("jobs").filter(function (j) { return j.status === "pending" || j.status === "failed"; }).length || ""; } },
     { id: "events", t: "Журнал", i: "inbox" },
     { id: "history", t: "История", i: "chart" },
+    { id: "browser", t: "Браузер", i: "link" },
     { id: "ext", t: "Расширение", i: "bolt" },
     { id: "setup", t: "Подключение", i: "link" },
     { id: "settings", t: "Настройки", i: "gear" },
@@ -717,6 +718,10 @@
     orders: viewOrders, chats: viewChats, rules: viewRules, jobs: viewJobs,
     events: viewEvents, settings: viewSettings,
     // Мастер живёт в отдельном файле: он нужен один раз и раздувать app.js незачем.
+    browser: function () {
+      return window.__browserView ? window.__browserView()
+        : '<div class="card"><div class="note err">browser.js не загрузился — обновите страницу.</div></div>';
+    },
     history: function () {
       return window.__historyView ? window.__historyView()
         : '<div class="card"><div class="note err">history.js не загрузился — обновите страницу.</div></div>';

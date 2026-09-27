@@ -299,3 +299,8 @@ td.acts .btn{margin-left:5px}
    одну: цифры важнее, чем держать их непременно в строку. */
 .cards4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px}
 .cards4 .card{padding:14px 16px}
+
+/* Кнопки разделов FunPay. Сетка, а не flex-wrap: так они одинаковой ширины
+   и не пляшут при разной длине названий. */
+.chips2{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
+.chips2 .btn{justify-content:flex-start}
