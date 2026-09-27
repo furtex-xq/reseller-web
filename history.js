@@ -127,8 +127,10 @@
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">' +
           '<span class="muted" style="width:16px">' + n + "</span>" +
           '<span style="flex:1;height:8px;background:var(--card2);border-radius:4px;overflow:hidden">' +
+          // Оценка — не статус заказа, а качество работы: золото здесь
+          // уместнее зелёного, и полоски не спорят с остальной палитрой.
           '<span style="display:block;height:100%;width:' + ш + '%;background:' +
-          (n >= 4 ? "var(--ok)" : n === 3 ? "var(--warn)" : "var(--err)") + '"></span></span>' +
+          (n >= 4 ? "var(--gold)" : n === 3 ? "var(--warn)" : "var(--err)") + '"></span></span>' +
           '<span class="muted" style="width:28px;text-align:right">' + по[n] + "</span></div>";
       }).join("") +
       "</div>";
@@ -149,7 +151,7 @@
         for (var i = 1; i <= 5; i++) звёзды += i <= о.rating ? "★" : "☆";
         return '<div style="padding:10px 0;border-bottom:1px solid var(--line)">' +
           '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">' +
-          '<span style="color:' + (о.rating >= 4 ? "var(--ok)" : о.rating === 3 ? "var(--warn)" : "var(--err)") +
+          '<span style="color:' + (о.rating >= 4 ? "var(--acc2)" : о.rating === 3 ? "var(--warn)" : "var(--err)") +
           '">' + звёзды + "</span>" +
           '<span class="muted">' + esc(о.detail || о.game || "") + "</span>" +
           '<span class="grow"></span>' +
