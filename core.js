@@ -16,6 +16,7 @@
   var TABLES = [
     "accounts", "products", "stock_keys", "listings",
     "chats", "orders", "messages", "message_rules", "jobs", "events",
+    "reviews",
   ];
 
   var PLATFORMS = { funpay: "FunPay", playerok: "Playerok" };

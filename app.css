@@ -294,3 +294,8 @@ td.acts .btn{margin-left:5px}
    ширину: у него нет собственных width/height, только viewBox. */
 .card>h2 svg,h2 svg{width:17px;height:17px;flex:0 0 auto;margin-right:7px;
   stroke:currentColor;fill:none;stroke-width:2}
+
+/* Четыре плитки денег в ряд. На узком экране сами перестраиваются в две и в
+   одну: цифры важнее, чем держать их непременно в строку. */
+.cards4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px}
+.cards4 .card{padding:14px 16px}
