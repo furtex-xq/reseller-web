@@ -34,7 +34,55 @@
       зачем: "Деньги и вывод" },
   ];
 
-  var СОСТ = { вкладки: null, ждём: false, ошибка: "" };
+  var СОСТ = {
+    вкладки: null, ждём: false, ошибка: "",
+    // Окно с FunPay внутри панели.
+    страница: null, путь: "/orders/trade", грузим: false, бедаОкна: "",
+  };
+
+  /**
+   * Показ страницы FunPay внутри панели.
+   *
+   * Живой рамкой этого не сделать: FunPay запрещает встраивание
+   * (X-Frame-Options: DENY), а его cookie идут с политикой Lax — в рамке на
+   * чужом домене они бы не отправились, и внутри оказался бы гость. Снимать
+   * и то и другое значило бы ослабить защиту ваших же сессий.
+   *
+   * Поэтому разметку читает расширение из вкладки funpay.com — там запрос
+   * свой и сессия при нём, — а панель показывает её в песочнице:
+   *
+   *   sandbox без allow-scripts  — чужой код не выполняется вовсе;
+   *   base href                  — картинки и стили грузятся как на сайте;
+   *   srcdoc                     — никакого отдельного запроса из панели.
+   *
+   * Это окно для чтения. Нажимать внутри нельзя — песочница не пускает
+   * переходы, и это правильно: иначе один неверный клик уводил бы страницу
+   * чёрт знает куда внутри вашей панели.
+   */
+  function окно() {
+    if (СОСТ.бедаОкна) {
+      return '<div class="note warn">Окно не открылось: ' + esc(СОСТ.бедаОкна) +
+        (/вкладок/i.test(СОСТ.бедаОкна)
+          ? " Откройте funpay.com в соседней вкладке — оттуда расширение и читает страницу."
+          : "") + "</div>";
+    }
+    if (СОСТ.грузим || !СОСТ.страница) {
+      return '<div class="note">' + (СОСТ.грузим ? "Читаю страницу FunPay…" : "Нажмите раздел выше — покажу его здесь.") + "</div>";
+    }
+    var с = СОСТ.страница;
+    var внутри = '<base href="https://funpay.com/">' +
+      '<style>body{margin:0}</style>' + с.html;
+    return (с.вошли
+      ? '<div class="sub" style="margin-bottom:8px">' + esc(с.адрес) + " · " +
+        esc(Math.round(с.размер / 1024)) + " КБ · вы вошли</div>"
+      : '<div class="note warn">FunPay отдал эту страницу как гостю. Откройте funpay.com ' +
+        "в соседней вкладке и войдите.</div>") +
+      '<iframe class="fpwin" sandbox referrerpolicy="no-referrer" srcdoc="' +
+      esc(внутри) + '"></iframe>' +
+      '<div class="note" style="margin-top:10px">Окно только показывает: нажимать внутри нельзя, ' +
+      "ссылки в песочнице не работают. Чтобы что-то сделать — кнопки разделов выше открывают " +
+      "настоящую вкладку.</div>";
+  }
 
   /** Спросить расширение. Мост живёт в ext.js — переиспользуем его. */
   function спросить(cmd, data) {
@@ -96,8 +144,15 @@
       "расширение и забирает заказы.</p>" +
       '<div class="chips2" style="margin-top:12px">' +
       РАЗДЕЛЫ.map(function (р) {
-        return '<button class="btn" data-act="br-open" data-url="' + esc(адресРаздела(р)) + '" ' +
-          'title="' + esc(р.зачем) + '">' + ic(р.значок) + " " + esc(р.имя) + "</button>";
+        var адрес = адресРаздела(р);
+        var путь = адрес.replace(/^https:\/\/funpay\.com/, "") || "/";
+        // Нажатие показывает раздел здесь же; стрелка открывает настоящую
+        // вкладку — для всего, что нужно нажимать.
+        return '<span class="pair">' +
+          '<button class="btn" data-act="br-show" data-url="' + esc(путь) + '" ' +
+          'title="' + esc(р.зачем) + '">' + ic(р.значок) + " " + esc(р.имя) + "</button>" +
+          '<button class="btn icon" data-act="br-open" data-url="' + esc(адрес) + '" ' +
+          'title="Открыть настоящей вкладкой">' + ic("link") + "</button></span>";
       }).join("") +
       "</div>" +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
@@ -108,14 +163,43 @@
       "в страницу нельзя, он это запрещает заголовком <code>X-Frame-Options: DENY</code>.</div>" +
       "</div>";
 
+    h += '<div class="card"><h2>' + ic("box") + " FunPay здесь" +
+      '<span class="grow"></span>' +
+      '<button class="btn sm" data-act="br-page" data-url="' + esc(СОСТ.путь) + '">' +
+      ic("ok") + " Обновить окно</button></h2>" +
+      окно() + "</div>";
+
     h += '<div class="card"><h2>' + ic("list") + " Открытые вкладки FunPay</h2>" +
       карточкаВкладок() + "</div>";
 
     return h;
   }
 
+  /** Показать раздел в окне панели. */
+  function показать(путь) {
+    СОСТ.путь = путь || СОСТ.путь;
+    СОСТ.грузим = true; СОСТ.бедаОкна = ""; window.__render();
+    return спросить("page", { путь: СОСТ.путь }).then(function (с) {
+      СОСТ.грузим = false; СОСТ.страница = с;
+      window.__render();
+    }, function (e) {
+      СОСТ.грузим = false; СОСТ.бедаОкна = e.message; СОСТ.страница = null;
+      window.__render();
+    });
+  }
+
   function act(a, el) {
     if (a === "br-refresh") { СОСТ.вкладки = null; СОСТ.ошибка = ""; window.__render(); return обновить(); }
+
+    if (a === "br-page") {
+      var п = el ? el.getAttribute("data-url") : СОСТ.путь;
+      return показать(п);
+    }
+
+    if (a === "br-show") {
+      var адрес = el ? el.getAttribute("data-url") : "";
+      return показать(String(адрес).replace(/^https:\/\/funpay\.com/, "") || "/");
+    }
 
     if (a === "br-open" || a === "br-focus") {
       var адрес = el ? el.getAttribute("data-url") : "";
